@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "briefing"
+version = "0.1.0"
+description = "Search the web, extract pages, and return clean summarized results."
+requires-python = ">=3.11"
+dependencies = [
+    "typer",
+    "rich",
+    "httpx",
+    "ddgs",
+    "pydantic",
+    "pyyaml",
+    "platformdirs",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "respx",
+    "ruff",
+]
+
+[project.scripts]
+briefing = "briefing.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [".claude", ".venv", "build", "dist"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
