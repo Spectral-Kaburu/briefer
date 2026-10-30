@@ -84,7 +84,7 @@ def test_genuine_short_article_is_not_barrier() -> None:
 # --- TRANSIENT 5xx (SPEC row 2) ---------------------------------------------
 
 
-@pytest.mark.parametrize("status", [500, 502, 504])
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
 def test_plain_server_error_is_transient(status: int) -> None:
     assert classify(status=status, content=GOOD, origin=Origin.LOCAL) is ErrorClass.TRANSIENT_5XX
 
