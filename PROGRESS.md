@@ -37,6 +37,35 @@ the Skill tool as tasks need them).
 
 Stubs created this task: `DECISIONS.md`, `DENIED.md`, `NOTES-APIS.md`.
 
+### T0.3 ✔ — API facts (done early, during T0.1)
+
+`NOTES-APIS.md` is populated with verified facts, source URLs included:
+
+- **Firecrawl scrape**: `POST {base}/v2/scrape`; request `url`, `formats`,
+  `maxAge`, `zeroDataRetention`, `onlyMainContent`; response
+  `success`, `data.markdown`, `data.html`, `data.metadata.statusCode`
+  (2xx or `304` = clean load).
+- **Firecrawl search**: `POST {base}/v2/search`; request `query`, `limit`,
+  `sources`. **Self-hosted / DuckDuckGo-v2.8.0 claim is UNVERIFIED** and is
+  flagged as needing a live probe (T2.2).
+- **Error codes**: full v2 status list captured (400/401/402/403/404/408/409/
+  413/422/429/500/502/503/504) plus all code strings on that page.
+  **SPEC's three codes (`SCRAPE_ALL_ENGINES_FAILED`, `SCRAPE_SITE_ERROR`,
+  `SCRAPE_DNS_RESOLUTION_ERROR`) are NOT in the current v2 reference** and a
+  source probe 404'd — see decision **D2** in `DECISIONS.md`.
+- **ddgs** (verified against the installed `ddgs 9.16.1` source, not just the
+  README): `text`/`news` take `(query, **kwargs)` returning
+  `list[dict[str, Any]]`; forwarded kwargs `region`, `safesearch`, `timelimit`,
+  `max_results`, `page`, `backend`. `timelimit` ∈ {`d`,`w`,`m`,`y`}. Exceptions:
+  `ddgs.exceptions.DDGSException` / `RatelimitException` / `TimeoutException`.
+  `region` is passthrough-unvalidated, so `ke-en` is plausible but unverified.
+- Typer + Rich docs and Gemini sections are deliberately still UNVERIFIED; they
+  are fetched in T3.2/T3.3 and T4.1 as PLAN.md specifies.
+
+Note: the API-research subagent **failed with a routing error** (not a content
+problem), so these facts were gathered by direct WebFetch + source inspection
+instead. That is why `NOTES-APIS.md` cites the installed package path.
+
 ### T0.1 + T0.2 ✔ — scaffold and Makefile
 
 TDD: wrote `tests/test_cli.py` first, watched it fail with
@@ -80,4 +109,26 @@ Next: **T0.4** `config.py` (pydantic models, YAML load, defaults, env key lookup
 platformdirs paths overridable for tests) + `config/briefing.yaml.example`.
 **T0.3** API facts were finished early — see `NOTES-APIS.md`, which is populated,
 not a stub.
+
+### T0.4 ✔ — config.py + example config
+
+TDD: `tests/test_config.py` written first, watched it fail with
+`ModuleNotFoundError: No module named 'briefing.config'`, then implemented.
+21 tests pass, `make check` green.
+
+- Every model sets `extra="forbid"`, so an unknown key is a `ConfigError` naming
+  the field — the fix hint points at SPEC §7. A run of tests confirmed
+  `news_topics: 5` and `search: {results: not-a-number}` both raise, so the error
+  path is proven, not assumed.
+- Defaults mirror SPEC §7 exactly, including `ke-en` → left at `us-en` and
+  UNVERIFIED in NOTES-APIS.md.
+- `resolve_api_key(config, env)` takes the env mapping as an argument and reads
+  the key at call time; it returns `None` when absent so load-time never needs a
+  key (tests pass with no key in the environment).
+- `load_config(state_dir=...)` and `BRIEFING_STATE_DIR` make paths injectable;
+  `test_shipped_example_config_loads` guards the shipped example against drift.
+- `config/briefing.yaml.example` documents every field inline, verified loadable.
+
+Next: **Phase 1** — T1.1 `fetch/errors.py` (classifier for SPEC §4).
+
 

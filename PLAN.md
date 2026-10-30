@@ -12,8 +12,8 @@ Skills: `superpowers:using-superpowers`, `superpowers:test-driven-development`
 - [x] **T0.0** List the skills actually available this session; write them to `PROGRESS.md`. Create `DECISIONS.md`, `DENIED.md`, `NOTES-APIS.md` stubs.
 - [x] **T0.1** Scaffold: `pyproject.toml` (src layout, `briefing` entry point; deps typer, rich, httpx, ddgs, pydantic, pyyaml, platformdirs; dev deps pytest, pytest-asyncio, respx, ruff), `.gitignore`, `README.md` stub, `.venv`. *Accept*: `.venv/bin/pip install -e ".[dev]"` ok and `.venv/bin/briefing --help` exits 0.
 - [x] **T0.2** `Makefile` with `check` (ruff check + ruff format --check + pytest), `test`, `fmt`. *Accept*: `make check` passes on the skeleton.
-- [ ] **T0.3** API facts: use a subagent to read `https://docs.firecrawl.dev/llms.txt`, the v2 scrape/search reference and `api-reference/errors.md`, plus the `ddgs` README. Record verified endpoint paths, request/response fields, error codes, `ddgs` news/text signatures and region codes in `NOTES-APIS.md` with source URLs. *Accept*: file exists and lists every endpoint/field later tasks use.
-- [ ] **T0.4** `config.py` (pydantic models, YAML load, defaults, env-var key lookup, platformdirs paths overridable for tests) + `config/briefing.yaml.example`. *Accept*: tests for defaults, overrides, missing key.
+- [x] **T0.3** API facts: use a subagent to read `https://docs.firecrawl.dev/llms.txt`, the v2 scrape/search reference and `api-reference/errors.md`, plus the `ddgs` README. Record verified endpoint paths, request/response fields, error codes, `ddgs` news/text signatures and region codes in `NOTES-APIS.md` with source URLs. *Accept*: file exists and lists every endpoint/field later tasks use.
+- [x] **T0.4** `config.py` (pydantic models, YAML load, defaults, env-var key lookup, platformdirs paths overridable for tests) + `config/briefing.yaml.example`. *Accept*: tests for defaults, overrides, missing key.
 
 ## Phase 1: Fetch core (T1.1 to T1.4 are independent) **[parallel]**
 Skills: `superpowers:dispatching-parallel-agents`, `superpowers:test-driven-development`

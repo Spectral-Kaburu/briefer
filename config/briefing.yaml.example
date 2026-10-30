@@ -1,0 +1,54 @@
+# briefing configuration example.
+#
+# Copy to ~/.config/briefing/briefing.yaml and edit. Every value below is a
+# default, so you can delete any line you don't need to change.
+#
+# `briefing config` shows the effective config and where it lives.
+
+# Topics used by `briefing run` (briefing mode). Research mode ignores these.
+news_topics: ["technology", "world news"]
+
+search:
+  # How many results to aim for per query.
+  results: 10
+  # DDG region code. Passed straight through to ddgs; ddgs does not validate it.
+  # Common: us-en, uk-en, ru-ru. Change this if your results are off-region.
+  region: us-en
+  # Words like "latest/breaking/today/news" switch DDG to news search.
+  auto_news_detect: true
+
+firecrawl:
+  local:
+    # Self-hosted Firecrawl. Start it with: docker compose up -d
+    base_url: http://localhost:3002
+    timeout_s: 30
+    concurrency: 5
+  api:
+    # Cloud API, used only when local extraction genuinely fails (SPEC section 4).
+    base_url: https://api.firecrawl.dev
+    # Name of the env var holding the key. The key itself is NEVER stored here.
+    key_env: FIRECRAWL_API_KEY
+    # Hard cap on API calls per day; at the cap, fetches degrade to snippet-only.
+    daily_limit: 20
+
+whitelist:
+  # Auto-whitelist a domain when local extraction hit a barrier (captcha, 403,
+  # 429, empty content). Dead links and unsolvable errors never get whitelisted.
+  auto_add: true
+  path: whitelist.yaml
+  # When true, whitelisted domains skip local and go straight to the API.
+  prefer_api_for_whitelisted: false
+
+summary:
+  # extractive (offline, instant) or llm (Gemini, opt-in via --llm).
+  mode: extractive
+  sentences: 2
+
+# Briefing mode only: never brief on these topics.
+blocklist_topics: [crypto, bitcoin, trading, forex, stocks]
+
+dedup:
+  # Forget a headline hash after this many days.
+  headline_ttl_days: 7
+  # Don't re-fire the same schedule_id within this window.
+  schedule_window_hours: 24
