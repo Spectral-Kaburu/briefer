@@ -105,6 +105,18 @@ Verified by inspecting the installed package source:
 
 Source files: `ddgs/ddgs.py`, `ddgs/exceptions.py`.
 
+### Result dict keys, verified per engine (T2.1, from `ddgs/engines/*.py`)
+
+| Engine | Fields it actually emits |
+|---|---|
+| `duckduckgo.py` (text) | `title`, `href`, `body` — **no `date`, no `source`** |
+| `duckduckgo_news.py` (news) | `title`, `url`, `body`, `date`, `source`, `rel` |
+
+So: `text()` results have **no age**, and `news()` results have one. The normalized
+`SearchResult.age` is therefore empty for `text()` hits unless the caller supplies
+it. Confirmed by reading `engines/duckduckgo.py:21` and
+`engines/duckduckgo_news.py:23-24` in the installed package.
+
 ## 5. Typer + Rich (for T3.2/T3.3)
 
 Not yet fetched. To verify against `typer.tiangolo.com` and
