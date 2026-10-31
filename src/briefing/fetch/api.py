@@ -7,6 +7,7 @@ records every call to a JSONL log, and refuses to touch the network without a ke
 
 from __future__ import annotations
 
+import asyncio
 import typing as t
 from datetime import datetime
 from pathlib import Path
@@ -72,6 +73,9 @@ class ApiFirecrawl:
         self._owns_client = client is None
         self._calls_made = 0
         self._disabled = False
+        # The cap and the refusal flag are read and written from concurrent
+        # fetches, so both need a lock — same asymmetry fix as whitelist.py.
+        self._lock = asyncio.Lock()
 
     async def aclose(self) -> None:
         if self._owns_client and self._client is not None:
@@ -81,6 +85,31 @@ class ApiFirecrawl:
     def can_use(self) -> bool:
         """False once a key is missing, the cap is hit, or the API has refused."""
         return bool(self.api_key) and not self._disabled and self._calls_made < self.daily_limit
+
+    async def _reserve(self) -> str | None:
+        """Atomically take one call from the daily budget.
+
+        Returns the blocking outcome when the call cannot be made, or None when a
+        slot was reserved. Without this the cap is advisory: concurrent fetches
+        each read `_calls_made`, all see room, and all call.
+        """
+        async with self._lock:
+            if self._disabled:
+                return "disabled"
+            if self._calls_made >= self.daily_limit:
+                return "capped"
+            self._calls_made += 1
+            return None
+
+    def _refund(self) -> None:
+        """Give a reserved slot back when the call never actually billed.
+
+        A transport error and a barrier mean nothing was spent. An API_SIDE
+        refusal is not refunded: it disables the client for the run anyway, and
+        keeping the count truthful keeps `can_use()` consistent.
+        """
+        if self._calls_made > 0:
+            self._calls_made -= 1
 
     def _require_key(self) -> str:
         if not self.api_key:
@@ -106,9 +135,9 @@ class ApiFirecrawl:
         """
         domain = urlparse(url).hostname or "unknown"
 
-        # The cap and the missing-key case must still be logged, per SPEC.
-        if not self.can_use():
-            outcome = "capped" if self.api_key else "no-key"
+        # The missing key needs no budget check; the cap and a refusal still log.
+        outcome = "no-key" if not self.api_key else await self._reserve()
+        if outcome is not None:
             self._log(url, domain, reason, outcome)
             return ApiScrapeResult(
                 ok=False, error_class=ErrorClass.API_SIDE, reason=self._degraded_reason(outcome)
@@ -123,6 +152,7 @@ class ApiFirecrawl:
         except (httpx.TimeoutException, httpx.ConnectError, OSError) as exc:
             classified = classify(exc=exc, origin=Origin.API)
             self._log(url, domain, reason, "transport-error")
+            self._refund()  # nothing was billed
             return ApiScrapeResult(
                 ok=False, error_class=classified.error_class, reason=classified.reason
             )
@@ -140,11 +170,12 @@ class ApiFirecrawl:
             if classified.error_class is ErrorClass.API_SIDE:
                 # Stop spending money: a refused API is refused for the whole run.
                 self._disabled = True
+            elif classified.error_class is ErrorClass.BARRIER:
+                self._refund()  # the API reached the page but got nowhere
             return ApiScrapeResult(
                 ok=False, error_class=classified.error_class, reason=classified.reason
             )
 
-        self._calls_made += 1
         self._log(url, domain, reason, "success")
         return ApiScrapeResult(
             ok=True,
@@ -157,6 +188,8 @@ class ApiFirecrawl:
     def _degraded_reason(self, outcome: str) -> str:
         if outcome == "no-key":
             return "the API key is not set, so only the search snippet is available"
+        if outcome == "disabled":
+            return "the cloud API refused an earlier request, so only the snippet is available"
         return f"the daily API limit of {self.daily_limit} is reached, so only the snippet is available"
 
     def _log(self, url: str, domain: str, reason: str, outcome: str) -> None:

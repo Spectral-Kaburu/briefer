@@ -256,14 +256,18 @@ def classify(
             ErrorClass.TRANSIENT_5XX, f"the site had a server error (HTTP {status})"
         )
 
+    # Rule 6: a local auth failure is a misconfiguration, not a barrier. This must
+    # be decided before the content check: a failed response carries no content,
+    # and an empty body must not be read as "the page rendered empty".
+    if origin is Origin.LOCAL and status in {401, 407}:
+        return Classification(ErrorClass.CONFIG, "local Firecrawl rejected our credentials")
+
+    # Rule 6b: an empty or furniture-only render. Placed after the auth check so
+    # only a response that actually reached the page can read as a failed render.
     if content is not None and (not content.strip() or _is_boilerplate_only(content)):
         return Classification(
             ErrorClass.BARRIER, "the page rendered empty, so a retry may get more"
         )
-
-    # Rule 6: a local auth failure is a misconfiguration, not a barrier.
-    if origin is Origin.LOCAL and status in {401, 407}:
-        return Classification(ErrorClass.CONFIG, "local Firecrawl rejected our credentials")
 
     # Rule 7: content that looks fine.
     if status is not None and 200 <= status < 300:

@@ -18,17 +18,17 @@ Skills: `superpowers:using-superpowers`, `superpowers:test-driven-development`
 ## Phase 1: Fetch core (T1.1 to T1.4 are independent) **[parallel]**
 Skills: `superpowers:dispatching-parallel-agents`, `superpowers:test-driven-development`
 
-- [ ] **T1.1** `fetch/errors.py`: classifier implementing the SPEC section 4 table. Input: HTTP status, Firecrawl error code, response body/markdown, exception type, and whether it came from local or API. Output: enum class + reason string. *Accept*: parametrized test with one case per table row, including captcha-page and empty-content detection fixtures. **[review]**
-- [ ] **T1.2** `fetch/local.py`: async client for local Firecrawl scrape + health check (per `NOTES-APIS.md`). *Accept*: respx tests for success, 403, 429, timeout, connection refused, 501.
-- [ ] **T1.3** `fetch/api.py`: cloud API client, daily cap, JSONL call log (URL, domain, reason, outcome). Key read from env var at call time only. *Accept*: tests for success, 402, 429, cap reached, missing key (clear error).
-- [ ] **T1.4** `whitelist.py`: host normalization, suffix matching (`www.` stripped, subdomains match), add/remove/list/prune, verified flag, atomic writes, concurrent-safe. *Accept*: tests incl. concurrent adds and prune of unverified entries. **[review]**
+- [x] **T1.1** `fetch/errors.py`: classifier implementing the SPEC section 4 table. Input: HTTP status, Firecrawl error code, response body/markdown, exception type, and whether it came from local or API. Output: enum class + reason string. *Accept*: parametrized test with one case per table row, including captcha-page and empty-content detection fixtures. **[review]**
+- [x] **T1.2** `fetch/local.py`: async client for local Firecrawl scrape + health check (per `NOTES-APIS.md`). *Accept*: respx tests for success, 403, 429, timeout, connection refused, 501.
+- [x] **T1.3** `fetch/api.py`: cloud API client, daily cap, JSONL call log (URL, domain, reason, outcome). Key read from env var at call time only. *Accept*: tests for success, 402, 429, cap reached, missing key (clear error).
+- [x] **T1.4** `whitelist.py`: host normalization, suffix matching (`www.` stripped, subdomains match), add/remove/list/prune, verified flag, atomic writes, concurrent-safe. *Accept*: tests incl. concurrent adds and prune of unverified entries. **[review]**
 - [x] **T1.5** `extract.py`: heading + extractive summary from markdown/metadata, boilerplate stripping. *Accept*: fixtures (news article, nav-heavy page, empty page, page with no h1) produce sensible 2-sentence summaries.
-- [ ] **T1.6** `fetch/router.py`: ties T1.1 to T1.4 together exactly per SPEC section 4 (barrier → whitelist + API; dead/not-solvable → snippet only; local-down → API without whitelisting; API-side errors → degrade; `prefer_api_for_whitelisted`; `--no-api`). *Accept*: scenario tests for every row of the classification table, asserting whitelist side effects and API call counts. **[review]**
+- [x] **T1.6** `fetch/router.py`: ties T1.1 to T1.4 together exactly per SPEC section 4 (barrier → whitelist + API; dead/not-solvable → snippet only; local-down → API without whitelisting; API-side errors → degrade; `prefer_api_for_whitelisted`; `--no-api`). *Accept*: scenario tests for every row of the classification table, asserting whitelist side effects and API call counts. **[review]**
 
 ## Phase 2: Search
 Skills: `superpowers:test-driven-development`
 
-- [ ] **T2.1** `search.py`: normalized `SearchResult`; `ddgs` news/text with auto-detect (latest/breaking/today/news), timelimit with day→week widening, rate-limit handling with backoff. *Accept*: mocked tests for detection, widening, rate limit.
+- [x] **T2.1** `search.py`: normalized `SearchResult`; `ddgs` news/text with auto-detect (latest/breaking/today/news), timelimit with day→week widening, rate-limit handling with backoff. *Accept*: mocked tests for detection, widening, rate limit.
 - [ ] **T2.2** Backup search via local Firecrawl `/search` when `ddgs` fails or rate-limits (verify behavior in `NOTES-APIS.md`). *Accept*: mocked fallback test.
 - [ ] **T2.3** Live smoke tests `@pytest.mark.live` for ddgs and local Firecrawl (skipped unless `BRIEFING_LIVE=1`). If local Firecrawl is up, run them once and record results in `PROGRESS.md`.
 

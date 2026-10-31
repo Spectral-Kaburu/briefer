@@ -172,6 +172,54 @@ async def test_capped_call_is_still_logged(client: ApiFirecrawl) -> None:
     assert "https://capped.example" in urls
 
 
+# --- concurrent cap enforcement (T1.6 review finding) -----------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_cap_holds_under_concurrent_fetches(client: ApiFirecrawl) -> None:
+    """SPEC section 4: api_daily_limit caps API calls.
+
+    The cap must survive `asyncio.gather`, which is how the pipeline (T3.1) drives
+    it. Without an atomic check-and-reserve, every coroutine passed `can_use()`
+    before any of them incremented, so the cap was exceeded by design.
+
+    The mock awaits before answering, as a real transport does; without that
+    suspension every coroutine would run to completion in turn and the race would
+    never reproduce.
+    """
+    import asyncio
+
+    async def slow_ok(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0)
+        return httpx.Response(200, json=_ok())
+
+    respx.post(f"{BASE}/v2/scrape").mock(side_effect=slow_ok)
+    results = await asyncio.gather(
+        *(client.scrape(f"https://example.com/{i}", reason="barrier") for i in range(10))
+    )
+    assert client._calls_made == 3
+    assert respx.calls.call_count == 3  # the other seven never reached the network
+    assert [r.ok for r in results].count(True) == 3
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_disable_holds_under_concurrent_refusals(client: ApiFirecrawl) -> None:
+    """SPEC section 4: an API-side refusal stops the API for the rest of the run."""
+    import asyncio
+
+    async def slow_402(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0)
+        return httpx.Response(402, text="no credits")
+
+    respx.post(f"{BASE}/v2/scrape").mock(side_effect=slow_402)
+    await asyncio.gather(
+        *(client.scrape(f"https://example.com/{i}", reason="barrier") for i in range(5))
+    )
+    assert not client.can_use()
+
+
 # --- missing key -----------------------------------------------------------
 
 

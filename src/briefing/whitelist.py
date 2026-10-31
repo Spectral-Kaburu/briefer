@@ -157,6 +157,11 @@ class Whitelist:
         async with self._lock:
             self.add(domain, reason, source)
 
+    async def record_api_call_async(self, host: str, success: bool) -> None:
+        """`record_api_call` under the lock: concurrent fetches would lose a hit."""
+        async with self._lock:
+            self.record_api_call(host, success)
+
     def remove(self, domain: str) -> None:
         entries = [e for e in self._load() if not host_matches(domain, e.domain)]
         self._save(entries)

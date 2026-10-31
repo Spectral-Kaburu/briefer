@@ -254,6 +254,22 @@ def test_add_async_is_the_same_operation_as_add(wl: Whitelist) -> None:
     assert wl.list()[0].domain == "example.com"
 
 
+def test_concurrent_record_api_call_does_not_lose_hits(path: Path) -> None:
+    """The router records API calls from concurrent fetches, so this needs the lock."""
+
+    async def run() -> None:
+        wl = Whitelist(path)
+        wl.add("site.example", reason="captcha")
+        await asyncio.gather(
+            *(wl.record_api_call_async("site.example", success=True) for _ in range(12))
+        )
+
+    asyncio.run(run())
+    entry = Whitelist(path).list()[0]
+    assert entry.api_hits == 12
+    assert entry.verified is True
+
+
 # --- YAML shape ------------------------------------------------------------
 
 

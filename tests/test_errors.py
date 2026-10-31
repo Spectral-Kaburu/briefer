@@ -158,6 +158,18 @@ def test_local_auth_failure_is_config_error(status: int) -> None:
     assert classify(status=status, content=GOOD, origin=Origin.LOCAL) is ErrorClass.CONFIG
 
 
+@pytest.mark.parametrize("status", [401, 407])
+def test_local_auth_failure_with_no_content_is_still_config(status: int) -> None:
+    """A failed response carries no markdown; that empty body must not read as a
+    failed render. Regression: the empty-content rule outranked CONFIG."""
+    assert classify(status=status, content="", origin=Origin.LOCAL) is ErrorClass.CONFIG
+
+
+@pytest.mark.parametrize("status", [401, 407])
+def test_local_auth_failure_with_no_content_argument_is_config(status: int) -> None:
+    assert classify(status=status, origin=Origin.LOCAL) is ErrorClass.CONFIG
+
+
 def test_api_401_is_api_side_not_config() -> None:
     """401 from the API is an auth problem on the API, not a local misconfig."""
     assert classify(status=401, content=GOOD, origin=Origin.API) is ErrorClass.API_SIDE
