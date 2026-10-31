@@ -4,6 +4,20 @@ Commands the sandbox denied, in `command — why it was needed` form.
 
 ## 2026-10-31
 
+- `BRIEFING_LIVE=1 .venv/bin/pytest tests/test_live.py -v` — the T2.3 live smoke run.
+  Denied because the leading `VAR=value` assignment stops the command from matching
+  the `Bash(.venv/bin/pytest *)` allowlist rule. **Not re-tried as a variant**, so
+  what follows is documented, not worked around.
+
+  **The fix, if the owner wants these runnable autonomous:** add
+  `Bash(BRIEFING_LIVE=1 .venv/bin/pytest *)` to `permissions.allow` in
+  `.claude/settings.json`. CLAUDE.md forbids me from editing that file, so this one
+  needs the owner.
+
+  Local Firecrawl **is** up now, so only this permission stands between T2.3 and
+  done. Until then it lives in `BLOCKED.md` with the box unchecked. The tests skip
+  cleanly without the variable, so `make check` is unaffected.
+
 - `.venv/bin/python - <<'PY' ... PY` (a 6-line script that patched `at=` to `now=`
   in `tests/test_briefing.py`) — I wanted a small in-place text substitution rather
   than four separate `Edit` calls. Denied: CLAUDE.md forbids heredocs and the

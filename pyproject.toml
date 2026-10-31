@@ -39,3 +39,6 @@ exclude = [".claude", ".venv", "build", "dist"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+    "live: smoke test against the real ddgs/local Firecrawl; needs BRIEFING_LIVE=1",
+]
