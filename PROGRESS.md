@@ -359,4 +359,76 @@ Next: **T2.2** backup search via local Firecrawl `/search` when `ddgs` fails or
 rate-limits (needs a live probe of the local instance to confirm the shape, which
 is still down).
 
+### T2.2 ✔ — backup search via local Firecrawl `/search` · **verifier PASS**
+
+TDD, 9 more tests (52 in `test_search.py`). `backup` is injected, so nothing hits
+the network; `FakeFirecrawlSearch` is the same shape as `Searcher`'s real one
+(`async def search(query, limit)`).
+
+- `/v2/search` web items carry `url`, `title`, `description`, `category`
+  (NOTES-APIS.md §2, verified against the doc page). `description` maps to
+  `snippet`; `category` has no home in SPEC §5's five fields and is dropped.
+- **No date field is verified**, so `age` stays empty and backup hits sort last.
+  NOTES-APIS records the news-item date field as UNVERIFIED until a live probe.
+- `_backup_search` never raises — a down local Firecrawl is exactly the case where
+  `ddgs` also failed, and `[httpx.ConnectError]` returning `[]` is covered.
+- The backup receives the **original** query, never a widened one.
+
+The verifier PASSed with two observations, both recorded rather than fixed:
+
+1. **`TimeoutException` → backup is not directly asserted.** `_run` returning `[]`
+   routes to the backup, and the rate-limit path proves it, but no test pairs a
+   timeout with a configured backup. Functionally correct; a one-line test would
+   close it, and it belongs with the T2.3 live probe rather than here.
+2. **A legitimately empty `ddgs` result triggers the backup.** SPEC §5 says the
+   backup is for when `ddgs` "fails or rate-limits"; an empty list is a *successful*
+   empty answer. `results or await self._backup_search(query)` cannot tell the two
+   apart without a sentinel, and treating an empty answer as fallback-worthy is the
+   safer reading (a second source beats nothing). Left as-is; worth an owner
+   decision if a query ever should return nothing cleanly.
+
+### T5.1 ✔ — `briefing.py` topic blocklist + headline dedup
+
+TDD, 40 tests. `make check` green (303 passed).
+
+- `headline_hash` sha256's the whitespace/case-normalised headline. **Full digest,
+  not truncated**: a truncated one risks a silent collision, which would suppress a
+  headline the owner never saw. `test_hash_is_not_the_headline_itself` guards this.
+- `is_blocked_topic` matches whole words, so `stock` blocks "stocks rally" but not
+  "knowledge economy" (`test_blocklist_matches_a_word_not_a_substring`).
+- `DedupStore(path, ttl_days=7, window_hours=24)`. The schedule gate lives in the
+  same file under a `fired` key, **omitted when empty** so a never-scheduled store
+  serialises to exactly `{"entries": []}`.
+- Atomic writes (temp + `os.replace`) and `record_async` under one asyncio lock —
+  the pipeline records concurrently, and `test_concurrent_records_do_not_lose_entries`
+  gathers 15 and asserts all 15 survive.
+- `record` **refreshes** rather than duplicates: a re-seen headline updates
+  `seen_at`, so a story that keeps running stays alive instead of ageing out.
+- `prune` drops TTL-expired entries so the file cannot grow without bound.
+- `_after` treats an **unparseable stamp as expired**, so a corrupt entry stops
+  suppressing headlines rather than silently hiding them.
+- `_load` returns empty for missing/corrupt/malformed data — a broken store must
+  never stop the briefing running. Covered for all three shapes.
+
+Four of my tests were wrong and I fixed the tests, not the code (worth recording,
+because the first instinct is to bend the implementation):
+
+1. `test_hash_ignores_case_and_surrounding_space` compared `HEADLINE` against a
+   *different* string (`"Bank Raises Lending Rate"` is not
+   `"Bank raises lending rate by fifty basis points"`), so it asserted two different
+   hashes were equal.
+2. Same class of error in `test_seen_is_case_insensitive`.
+3. `test_filter_keeps_only_unblocked_topics` listed `bitcoin` against a blocklist of
+   `["crypto", "forex"]` — `bitcoin` was never blocked, so the filter was right and
+   the fixture was wrong.
+4. `test_filter_drops_everything_when_all_blocked` used bare topic names
+   (`"bitcoin"`), which no real query produces.
+
+The schedule tests were also made deterministic: `mark_fired`/`should_fire` now
+take an explicit `now=`, and `test_re_recording_refreshes_the_timestamp` compares
+parsed datetimes rather than ISO strings (which are offset-formatted and so not
+directly comparable as strings).
+
+Next: **T2.3** live smoke tests (blocked: local Firecrawl is down), then **T5.2**.
+
 

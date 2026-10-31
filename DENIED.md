@@ -2,6 +2,23 @@
 
 Commands the sandbox denied, in `command — why it was needed` form.
 
+## 2026-10-31
+
+- `.venv/bin/python - <<'PY' ... PY` (a 6-line script that patched `at=` to `now=`
+  in `tests/test_briefing.py`) — I wanted a small in-place text substitution rather
+  than four separate `Edit` calls. Denied: CLAUDE.md forbids heredocs and the
+  allowlist has no heredoc rule. **Not re-tried as a variant**; re-done with the
+  `Edit` tool, which is the dedicated tool for this and the one CLAUDE.md says to
+  prefer anyway. The heredoc was the wrong tool regardless of the allowlist —
+  `Edit` was available, correct, and cheaper. Nothing needed from the owner.
+
+- `git check-ignore -v .claude/.stop_gate_count` — I wanted to confirm why a
+  `.gitignore`d file still shows as modified in `git status` (it is tracked from
+  T0.1, so gitignore does not apply to it). Denied. **Not re-tried.** The answer is
+  already known from git's own behaviour and does not need a live check: a tracked
+  file stays tracked regardless of `.gitignore`, so `gitignore` only stops *new*
+  files being added. Nothing needed from the owner.
+
 ## 2026-10-27
 
 - `git -C /home/spectre/Documents/morning add -A` — T0.0 wanted to stage the four

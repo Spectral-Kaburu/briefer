@@ -29,7 +29,7 @@ Skills: `superpowers:dispatching-parallel-agents`, `superpowers:test-driven-deve
 Skills: `superpowers:test-driven-development`
 
 - [x] **T2.1** `search.py`: normalized `SearchResult`; `ddgs` news/text with auto-detect (latest/breaking/today/news), timelimit with day→week widening, rate-limit handling with backoff. *Accept*: mocked tests for detection, widening, rate limit.
-- [ ] **T2.2** Backup search via local Firecrawl `/search` when `ddgs` fails or rate-limits (verify behavior in `NOTES-APIS.md`). *Accept*: mocked fallback test.
+- [x] **T2.2** Backup search via local Firecrawl `/search` when `ddgs` fails or rate-limits (verify behavior in `NOTES-APIS.md`). *Accept*: mocked fallback test.
 - [ ] **T2.3** Live smoke tests `@pytest.mark.live` for ddgs and local Firecrawl (skipped unless `BRIEFING_LIVE=1`). If local Firecrawl is up, run them once and record results in `PROGRESS.md`.
 
 ## Phase 3: Research pipeline and CLI
@@ -49,7 +49,7 @@ Skills: `superpowers:test-driven-development`
 ## Phase 5: Briefing mode
 Skills: `superpowers:test-driven-development`
 
-- [ ] **T5.1** `briefing.py` filters: topic blocklist (crypto/finance speculation) and headline-hash dedup store with 7-day TTL (`seen_headlines.json`, atomic writes). *Accept*: unit tests incl. TTL expiry.
+- [x] **T5.1** `briefing.py` filters: topic blocklist (crypto/finance speculation) and headline-hash dedup store with 7-day TTL (`seen_headlines.json`, atomic writes). *Accept*: unit tests incl. TTL expiry.
 - [ ] **T5.2** `schedule_id` 24h gate + audio-state gate behind an injectable `AudioState` provider (interface plus a file/stub implementation; document what Aether must supply). *Accept*: tests for fired-today, speaking, open gate.
 - [ ] **T5.3** `prompts/briefing.txt` + synthesis call (name, session summary, headlines → 2-3 spoken sentences, under ~45s), with plain-greeting fallback if all fetching fails. *Accept*: mocked tests incl. fallback.
 - [ ] **T5.4** `deliver.py`: `voice-tts -s aether -p high "<text>"` through an injectable runner, `--dry-run` prints the command. `briefing run` command wires everything. *Accept*: tests with a fake runner; never executes `voice-tts`.
