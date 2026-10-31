@@ -22,7 +22,7 @@ Skills: `superpowers:dispatching-parallel-agents`, `superpowers:test-driven-deve
 - [ ] **T1.2** `fetch/local.py`: async client for local Firecrawl scrape + health check (per `NOTES-APIS.md`). *Accept*: respx tests for success, 403, 429, timeout, connection refused, 501.
 - [ ] **T1.3** `fetch/api.py`: cloud API client, daily cap, JSONL call log (URL, domain, reason, outcome). Key read from env var at call time only. *Accept*: tests for success, 402, 429, cap reached, missing key (clear error).
 - [ ] **T1.4** `whitelist.py`: host normalization, suffix matching (`www.` stripped, subdomains match), add/remove/list/prune, verified flag, atomic writes, concurrent-safe. *Accept*: tests incl. concurrent adds and prune of unverified entries. **[review]**
-- [ ] **T1.5** `extract.py`: heading + extractive summary from markdown/metadata, boilerplate stripping. *Accept*: fixtures (news article, nav-heavy page, empty page, page with no h1) produce sensible 2-sentence summaries.
+- [x] **T1.5** `extract.py`: heading + extractive summary from markdown/metadata, boilerplate stripping. *Accept*: fixtures (news article, nav-heavy page, empty page, page with no h1) produce sensible 2-sentence summaries.
 - [ ] **T1.6** `fetch/router.py`: ties T1.1 to T1.4 together exactly per SPEC section 4 (barrier → whitelist + API; dead/not-solvable → snippet only; local-down → API without whitelisting; API-side errors → degrade; `prefer_api_for_whitelisted`; `--no-api`). *Accept*: scenario tests for every row of the classification table, asserting whitelist side effects and API call counts. **[review]**
 
 ## Phase 2: Search

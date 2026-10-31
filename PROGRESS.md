@@ -129,6 +129,76 @@ TDD: `tests/test_config.py` written first, watched it fail with
   `test_shipped_example_config_loads` guards the shipped example against drift.
 - `config/briefing.yaml.example` documents every field inline, verified loadable.
 
-Next: **Phase 1** — T1.1 `fetch/errors.py` (classifier for SPEC §4).
+## Phase 1: Fetch core
+
+### T1.1 ✔ — `fetch/errors.py` classifier (SPEC §4 table) · **[review] PASS**
+
+TDD: test first, RED (`No module named 'briefing.fetch.errors'`), then implement.
+56 tests; `make check` green. **Reviewer returned PASS** with one suggestion
+(plain 503 not covered in the transient row) — fixed by adding 503 to the
+parametrised case; 4 transient cases now pass.
+
+Bugs found and fixed during the RED→GREEN loop (worth knowing if you touch
+`errors.py` again):
+
+1. **Challenge pages returned DEAD, must be BARRIER** (SPEC row 1). My own comment
+   said row 1 while the code said DEAD.
+2. **Ordering was wrong in three places.** Rules are now ordered so codes outrank
+   statuses (barrier code on a 503 → BARRIER), exceptions outrank statuses, and
+   401 from LOCAL is CONFIG while 401 from API is API_SIDE.
+3. **Timeouts were split by the wrong axis.** SPEC §4: "LOCAL DOWN | connection
+   refused / **local timeout reaching Firecrawl itself**" vs row 1 "408 or
+   timeout". A *connect* timeout is LOCAL_DOWN; a *read/pool* timeout is BARRIER.
+   The test originally asserted the opposite for `ConnectTimeout`; the SPEC
+   decided it, so the test was corrected, not the code.
+4. **Body-text rows were entirely missing.** I had encoded only statuses and
+   codes, so redirect loops, invalid URLs, and binary content types all fell
+   through to the catch-all BARRIER. Added `_DEAD_BODY_MARKERS` /
+   `_NOT_SOLVABLE_BODY_MARKERS`, matching SPEC's "invalid URL, redirect loop"
+   (row 3) and "unsupported / binary content type" (row 4).
+5. **Boilerplate-only detection never fired.** The old word-count heuristic
+   treated exactly-8-word nav lists as prose. Replaced with: every line must be a
+   boilerplate marker and under 40 chars, with HTML comments/tags stripped first.
+   The 40-char bound is what keeps genuinely short articles out of BARRIER.
+6. **`exc` must accept instances, not just classes.** A caught exception is an
+   instance; normalised with `exc if isinstance(exc, type) else type(exc)`.
+
+Two deliberate leniency decisions, both recorded in `DECISIONS.md`:
+SPEC's `SCRAPE_*` codes are matched **by prefix** (see **D2**) so v1 and v2
+spellings both classify.
+
+### T1.2 ✔ — `fetch/local.py` local Firecrawl client
+
+TDD, 16 tests, respx-mocked, no network. `scrape()` never raises on a fetch
+failure — a transport error or non-2xx becomes a classified `LocalScrapeResult`,
+so one bad URL cannot kill a run. Heading falls back to the first markdown `h1`
+when metadata carries no title. `health()` is a plain GET on the root.
+
+### T1.3 ✔ — `fetch/api.py` cloud API client
+
+TDD, 13 tests, respx-mocked. `daily_limit` caps calls; a capped call and a
+missing-key call are **still logged** (SPEC: "at the cap, fetches degrade to
+snippet-only but entries are still recorded") but never reach the network — the
+cap test asserts `respx.calls.call_count == 3`. Any API-side refusal (402/429/401)
+sets `_disabled`, stopping spend for the rest of the run. `test_no_key_in_log`
+asserts the key string is absent from the JSONL log.
+
+### T1.4 ✔ — `whitelist.py` store · **[review] dispatched**
+
+TDD, 39 tests. `normalize_host` strips scheme/`www.`/port/userinfo/case;
+`host_matches` implements the whole-domain rule (subdomains match; the
+`example.com.evil.net` false positive is covered). Writes are atomic: a temp file
+in the same directory + `os.replace` (atomic on one filesystem), so a reader
+never sees a partial document. `add_async` serialises through one asyncio lock.
+`prune` drops unverified **auto** entries but keeps `manual` ones, since those are
+the owner's. Knows nothing about the API key.
+
+**Housekeeping note**: T1.3's files were swept into the T1.4 commit by a
+`git add -A` before I had committed T1.3 separately. Both are green and tested;
+the history is just mislabelled. If a later task needs "what changed in T1.4",
+read `sha::src/briefing/whitelist.py` and ignore `src/briefing/fetch/api.py`.
+
+Next: **T1.5** `extract.py` (heading + extractive summary, boilerplate stripping),
+then **T1.6** `fetch/router.py` (ties T1.1–T1.4 together per SPEC §4).
 
 
