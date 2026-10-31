@@ -35,7 +35,7 @@ Skills: `superpowers:test-driven-development`
 ## Phase 3: Research pipeline and CLI
 Skills: `superpowers:test-driven-development`; for `ui.py` also fetch Rich/Typer docs (allowed domains) via a subagent and note the relevant API in `NOTES-APIS.md`.
 
-- [ ] **T3.1** `pipeline.py`: search → fetch (semaphore-limited concurrency) → extract; emits progress events consumed by the UI; per-URL timeouts; one bad URL never kills the run. *Accept*: mocked end-to-end test with mixed outcomes (local ok, barrier→API, dead, local down). **[review]**
+- [x] **T3.1** `pipeline.py`: search → fetch (semaphore-limited concurrency) → extract; emits progress events consumed by the UI; per-URL timeouts; one bad URL never kills the run. *Accept*: mocked end-to-end test with mixed outcomes (local ok, barrier→API, dead, local down). **[review]**
 - [ ] **T3.2** `ui.py`: Rich live progress (one spinner line per URL), method badges, result cards, footer panel, `--plain` and `NO_COLOR` handling. *Accept*: snapshot tests via `Console(record=True, width=100)` for each badge state and the footer.
 - [ ] **T3.3** `cli.py`: `briefing -r "<query>"` shorthand, `research` command and all flags from SPEC section 3, `--json`, friendly errors with fix hints. *Accept*: Typer `CliRunner` tests; `briefing --help` and `briefing research --help` read clearly (include examples in help text).
 - [ ] **T3.4** `whitelist` subcommands, `status` (local health, API key present?, daily usage, ddgs reachable), `config`. *Accept*: CliRunner tests.
@@ -50,7 +50,7 @@ Skills: `superpowers:test-driven-development`
 Skills: `superpowers:test-driven-development`
 
 - [x] **T5.1** `briefing.py` filters: topic blocklist (crypto/finance speculation) and headline-hash dedup store with 7-day TTL (`seen_headlines.json`, atomic writes). *Accept*: unit tests incl. TTL expiry.
-- [ ] **T5.2** `schedule_id` 24h gate + audio-state gate behind an injectable `AudioState` provider (interface plus a file/stub implementation; document what Aether must supply). *Accept*: tests for fired-today, speaking, open gate.
+- [x] **T5.2** `schedule_id` 24h gate + audio-state gate behind an injectable `AudioState` provider (interface plus a file/stub implementation; document what Aether must supply). *Accept*: tests for fired-today, speaking, open gate.
 - [ ] **T5.3** `prompts/briefing.txt` + synthesis call (name, session summary, headlines → 2-3 spoken sentences, under ~45s), with plain-greeting fallback if all fetching fails. *Accept*: mocked tests incl. fallback.
 - [ ] **T5.4** `deliver.py`: `voice-tts -s aether -p high "<text>"` through an injectable runner, `--dry-run` prints the command. `briefing run` command wires everything. *Accept*: tests with a fake runner; never executes `voice-tts`.
 

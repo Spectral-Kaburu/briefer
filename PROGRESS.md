@@ -431,4 +431,76 @@ directly comparable as strings).
 
 Next: **T2.3** live smoke tests (blocked: local Firecrawl is down), then **T5.2**.
 
+### T5.2 ✔ — schedule gate + audio-state gate
+
+TDD, 16 more tests (56 in `test_briefing.py`). `make check` green (364 passed).
+
+- `Gate(store, audio)` holds no state of its own, so two gates over one store agree
+  (tested directly). `refusal()` returns a *reason* rather than a bool, so the
+  caller can tell the owner why the briefing stayed quiet.
+- `FileAudioState(path)` reads the JSON file Aether writes. Missing, corrupt,
+  non-mapping, and unknown-state all mean "not speaking" — decided in **D7**, with
+  the reasoning: SPEC §6 gates on a state we don't know, not on our ability to
+  read it, and the alternative failure mode is a briefing that silently never
+  speaks again. An open gate with an unreadable state only risks talking over the
+  user once, which is recoverable and visible.
+- Three named cases are covered: fired-today, speaking, open gate.
+- The provider is injected, so T5.3/T5.4 tests never touch the real audio state.
+
+One of my own test assertions was wrong here and the code was right:
+`test_the_gate_checks_the_audio_even_after_a_refusal` asserted `audio.calls > 0`,
+but the schedule gate refuses *first* and never reads audio. Rewrote it as
+`test_the_gate_does_not_need_the_audio_when_the_schedule_refuses` asserting
+`audio.calls == 0` — which is the better behaviour, since it means a broken audio
+provider can't even surface in the logs when the schedule already says no.
+
+### T3.1 ✔ — `pipeline.py` search → fetch → extract · **[review] FAIL → fixes → verifier**
+
+TDD, 45 tests. `make check` green (364 passed).
+
+The pipeline runs URLs concurrently under one `asyncio.Semaphore`
+(`_DEFAULT_CONCURRENCY = 5`, SPEC §2), applies a per-URL timeout, and degrades a
+single bad URL to a failed result rather than ending the run. It emits
+`Event(kind="started"|"finished"|"done")` and returns a `Report`.
+
+**The review FAILed, and every finding was real.** Worth recording because they
+were all things I had tested *around* rather than *for*:
+
+1. **The acceptance test did not exist.** I had built a `FakeRouter` and tested the
+   pipeline's own bookkeeping thoroughly, but never once driven the real `Router`
+   end-to-end — so nothing proved the pipeline actually wires SPEC §4's table
+   correctly. Added four tests (`@respx.mock`, real `Router` + real
+   `ApiFirecrawl` + temp `Whitelist`): local ok, barrier→API (asserting
+   `api_route.call_count == 1` **and** a whitelist entry), dead (no API call, no
+   whitelist file), local-down (API, no whitelist write). The fourth is the
+   acceptance in one run, asserting all four `method`s plus the footer counts.
+   Two things this immediately exposed in my tests: I had invented an
+   `api._api_key` attribute that does not exist (the key is a constructor arg),
+   and my `side_effect` dispatcher matched on `request.url` when the *target* URL
+   lives in the POST body — so the "barrier" URL was silently being served the
+   happy-path fixture. Both would have shipped green.
+2. **`Report` carried nothing for the whitelist caption.** SPEC §3's footer shows
+   `whitelist +1 (example.co.ke: captcha)`, and the report had no room for it, so
+   the UI would have had to reach into the whitelist store separately. Added
+   `whitelist: list[tuple[domain, reason]]`, populated from a before/after diff of
+   the injected store (`_whitelisted`/`_added`, both boarding an unreadable store
+   as empty rather than stopping the run).
+3. **`Event.done` was the hit's rank, not a running count.** Under concurrency
+   events arrive out of order, so `done` cannot drive an "N of M done" line. The
+   field is documented as the rank and `Progress.finished` / `Report.progress` is
+   the real tally.
+4. **`timeout_s=None` was the default**, so a caller who never set one got a run
+   that could hang forever with every semaphore slot held by a stalled URL. The
+   default is now `_DEFAULT_TIMEOUT_S = 30.0`; `0` opts out explicitly (tested).
+
+Three decisions these forced are recorded as **D8** (a pipeline timeout is
+reported as `TRANSIENT_5XX` — least-privileged outcome, `warning` carries the
+real text) and **D9** (duplicate search hits fetch once, first hit wins, so
+`Report.found` can't count one page twice).
+
+One thing worth naming about this round: every finding was in the *gap* between
+what I tested and what I claimed, not in code I got wrong. A fake router made the
+pipeline look finished. The lesson I'm carrying to T3.2/T3.3: when a component's
+job is to *wire* other components, at least one test must use the real ones.
+
 

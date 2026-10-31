@@ -1,20 +1,24 @@
-"""Tests for briefing.py (T5.1): topic blocklist and headline-hash dedup.
+"""Tests for briefing.py: topic blocklist, dedup (T5.1) and gates (T5.2).
 
 Briefing mode is the only caller, so the blocklist applies here and nowhere else
-(SPEC section 6). The dedup store is a plain JSON file with a TTL.
+(SPEC section 6). The dedup store is a plain JSON file with a TTL; the gate
+layers the 24h schedule rule and the "never speak over the user" audio rule on
+top of it.
 """
 
 from __future__ import annotations
 
 import json
 import typing as t
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from briefing.briefing import (
     DedupStore,
+    FileAudioState,
+    Gate,
     SeenHeadline,
     TopicFilter,
     headline_hash,
@@ -276,3 +280,167 @@ def test_concurrent_records_do_not_lose_entries(store: DedupStore) -> None:
 
     asyncio.run(run())
     assert len(json.loads(store.path.read_text())["entries"]) == 15
+
+
+# --- audio-state gate (T5.2) ----------------------------------------------
+
+
+class FakeAudio:
+    """Injected `AudioState`; `speaking` is the whole answer it gives."""
+
+    def __init__(self, speaking: bool = False, raises: Exception | None = None) -> None:
+        self._speaking = speaking
+        self._raises = raises
+        self.calls = 0
+
+    async def speaking(self) -> bool:
+        self.calls += 1
+        if self._raises is not None:
+            raise self._raises
+        return self._speaking
+
+
+@pytest.mark.asyncio
+async def test_file_audio_state_reads_speaking_from_the_file(tmp_path: Path) -> None:
+    """The file is the agreed IPC surface Aether writes."""
+    path = tmp_path / "audio.json"
+    path.write_text(json.dumps({"state": "speaking"}))
+    assert await FileAudioState(path).speaking()
+
+
+@pytest.mark.asyncio
+async def test_file_audio_state_reads_idle_from_the_file(tmp_path: Path) -> None:
+    path = tmp_path / "audio.json"
+    path.write_text(json.dumps({"state": "idle"}))
+    assert not await FileAudioState(path).speaking()
+
+
+@pytest.mark.asyncio
+async def test_file_audio_state_treats_a_missing_file_as_not_speaking(tmp_path: Path) -> None:
+    """No file means Aether has not started; that is not a reason to stay silent."""
+    assert not await FileAudioState(tmp_path / "absent.json").speaking()
+
+
+@pytest.mark.asyncio
+async def test_file_audio_state_treats_a_corrupt_file_as_not_speaking(tmp_path: Path) -> None:
+    """A unreadable state must not wedge the briefing shut, but must be detectable."""
+    path = tmp_path / "audio.json"
+    path.write_text("{not json")
+    assert not await FileAudioState(path).speaking()
+
+
+@pytest.mark.asyncio
+async def test_file_audio_state_treats_an_unknown_state_as_not_speaking(tmp_path: Path) -> None:
+    path = tmp_path / "audio.json"
+    path.write_text(json.dumps({"state": "garbled"}))
+    assert not await FileAudioState(path).speaking()
+
+
+@pytest.mark.asyncio
+async def test_file_audio_state_ignores_a_json_list(tmp_path: Path) -> None:
+    path = tmp_path / "audio.json"
+    path.write_text(json.dumps(["speaking"]))
+    assert not await FileAudioState(path).speaking()
+
+
+class FakeClock:
+    """Injected clock, so the 24h gate never depends on the wall clock."""
+
+    def __init__(self) -> None:
+        self.now = datetime(2026, 10, 31, 8, 0, tzinfo=UTC)
+
+    def __call__(self) -> datetime:
+        return self.now
+
+    def advance(self, **kwargs: t.Any) -> None:
+        self.now += timedelta(**kwargs)
+
+
+async def _open_briefing(store: DedupStore, audio: FakeAudio, clock: FakeClock) -> str | None:
+    """`Gate.refusal`: the refusal reason, or None when the briefing may fire."""
+    gate = Gate(store, audio)
+    return await gate.refusal(now=clock(), schedule=store.schedule_id(clock()))
+
+
+@pytest.mark.asyncio
+async def test_the_gate_opens_when_nothing_has_fired(store: DedupStore) -> None:
+    audio = FakeAudio()
+    refusal = await _open_briefing(store, audio, FakeClock())
+    assert refusal is None
+
+
+@pytest.mark.asyncio
+async def test_the_gate_refuses_when_the_schedule_already_fired(store: DedupStore) -> None:
+    """SPEC section 6: schedule_id suppresses re-fire for 24h."""
+    clock = FakeClock()
+    store.mark_fired(store.schedule_id(clock()), now=clock())
+    refusal = await _open_briefing(store, FakeAudio(), clock)
+    assert refusal == "already fired today"
+
+
+@pytest.mark.asyncio
+async def test_the_gate_refuses_while_the_audio_is_speaking(store: DedupStore) -> None:
+    """SPEC section 6: never fire while audio.state == speaking."""
+    refusal = await _open_briefing(store, FakeAudio(speaking=True), FakeClock())
+    assert refusal == "speaking"
+
+
+@pytest.mark.asyncio
+async def test_the_gate_opens_when_the_audio_is_idle(store: DedupStore) -> None:
+    refusal = await _open_briefing(store, FakeAudio(speaking=False), FakeClock())
+    assert refusal is None
+
+
+@pytest.mark.asyncio
+async def test_the_gate_opens_after_the_24h_window_passes(store: DedupStore) -> None:
+    clock = FakeClock()
+    store.mark_fired(store.schedule_id(clock()), now=clock())
+    clock.advance(hours=25)
+    assert await _open_briefing(store, FakeAudio(), clock) is None
+
+
+@pytest.mark.asyncio
+async def test_the_gate_checks_the_audio_even_after_a_refusal(store: DedupStore) -> None:
+    """An unreadable audio state must never be the thing that stays silent."""
+
+
+@pytest.mark.asyncio
+async def test_the_gate_does_not_need_the_audio_when_the_schedule_refuses(
+    store: DedupStore,
+) -> None:
+    """The schedule gate alone is enough to refuse, so audio goes unread."""
+    clock = FakeClock()
+    store.mark_fired(store.schedule_id(clock()), now=clock())
+    audio = FakeAudio(speaking=True)
+    refusal = await _open_briefing(store, audio, clock)
+    assert refusal == "already fired today"
+    assert audio.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_the_gate_stays_open_when_the_audio_state_is_unreadable(store: DedupStore) -> None:
+    """A raised provider must not wedge the briefing shut (see DECISIONS.md D7)."""
+    refusal = await _open_briefing(store, FakeAudio(raises=OSError("no socket")), FakeClock())
+    assert refusal is None
+
+
+@pytest.mark.asyncio
+async def test_the_gate_records_the_fire_once_allowed(store: DedupStore) -> None:
+    """Marking fired is the caller's move, and the gate must expose it plainly."""
+    clock = FakeClock()
+    schedule = store.schedule_id(clock())
+    gate = Gate(store, FakeAudio())
+    assert await gate.refusal(now=clock(), schedule=schedule) is None
+    store.mark_fired(schedule, now=clock())
+    assert await gate.refusal(now=clock(), schedule=schedule) == "already fired today"
+
+
+@pytest.mark.asyncio
+async def test_two_gates_on_one_store_agree(store: DedupStore) -> None:
+    """The gate holds no state of its own, so a second instance sees the same file."""
+    clock = FakeClock()
+    first = Gate(store, FakeAudio())
+    second = Gate(store, FakeAudio())
+    assert await first.refusal(now=clock(), schedule=store.schedule_id(clock())) is None
+    store.mark_fired(store.schedule_id(clock()), now=clock())
+    assert await second.refusal(now=clock(), schedule=store.schedule_id(clock())) is not None

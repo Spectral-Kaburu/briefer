@@ -178,16 +178,6 @@ class DedupStore:
 
     # --- the 24h schedule gate ----------------------------------------------
 
-    def schedule_id(self, when: datetime) -> str:
-        """One id per briefing run, so a refire inside the window is recognisable."""
-        return f"{_SCHEDULE_PREFIX}_{when.date().isoformat()}"
-
-    def mark_fired(self, schedule: str, now: datetime | None = None) -> None:
-        """Note that `schedule` fired, so `should_fire` can gate a refire."""
-        entries, fired = self._load()
-        fired[schedule] = _aware(now).isoformat()
-        self._save(entries, fired)
-
     def should_fire(
         self, schedule: str, *, window_hours: int | None = None, now: datetime | None = None
     ) -> bool:
@@ -199,6 +189,72 @@ class DedupStore:
             hours=self.window_hours if window_hours is None else window_hours
         )
         return not _after(fired, cutoff)
+
+    def schedule_id(self, when: datetime) -> str:
+        """One id per briefing run, so a refire inside the window is recognisable."""
+        return f"{_SCHEDULE_PREFIX}_{when.date().isoformat()}"
+
+    def mark_fired(self, schedule: str, now: datetime | None = None) -> None:
+        """Note that `schedule` fired, so `should_fire` can gate a refire."""
+        entries, fired = self._load()
+        fired[schedule] = _aware(now).isoformat()
+        self._save(entries, fired)
+
+
+class FileAudioState:
+    """Reads Aether's recorded audio state from a small JSON file.
+
+    This is the agreed IPC surface: Aether writes `{"state": "idle"}` when it
+    finishes speaking and the next `briefing run` may proceed. See
+    `docs/AETHER_INTEGRATION.md` (T6.4) for the full contract.
+
+    A missing or unreadable file means "no state recorded", which is *not*
+    evidence that Aether is mid-sentence; see `Gate.refusal` for why that is
+    treated as safe rather than blocking.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    async def speaking(self) -> bool:
+        """True only when the file records a positive speaking state."""
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        if not isinstance(data, dict):
+            return False
+        return str(data.get("state", "")).strip().lower() == "speaking"
+
+
+class Gate:
+    """Decides whether a briefing may fire: 24h schedule + audio state.
+
+    Holds no state of its own beyond the store and the audio provider it was
+    built with, so two gates over one store always agree. Both collaborators are
+    injected, which is what keeps T5.3/T5.4 tests off the real audio state.
+    """
+
+    def __init__(self, store: DedupStore, audio: t.Any) -> None:
+        self.store = store
+        self.audio = audio
+
+    async def refusal(self, *, now: datetime, schedule: str) -> str | None:
+        """Why the briefing may not fire, or None when it may.
+
+        The schedule gate is checked first, then the audio gate. A provider that
+        *raises* is treated as not speaking (SPEC section 6 gates on a recorded
+        state, and we never recorded ours), so an unreachable Aether cannot wedge
+        the briefing silent forever — recorded as D7.
+        """
+        if not self.store.should_fire(schedule, now=now):
+            return "already fired today"
+        try:
+            if await self.audio.speaking():
+                return "speaking"
+        except Exception:  # noqa: BLE001 - an unreachable provider must not block
+            return None
+        return None
 
 
 def _aware(moment: datetime | None) -> datetime:
