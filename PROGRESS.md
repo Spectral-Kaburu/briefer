@@ -429,7 +429,8 @@ take an explicit `now=`, and `test_re_recording_refreshes_the_timestamp` compare
 parsed datetimes rather than ISO strings (which are offset-formatted and so not
 directly comparable as strings).
 
-Next: **T2.3** live smoke tests (blocked: local Firecrawl is down), then **T5.2**.
+Next: **T2.3** live smoke tests (written, but the live run is blocked by a
+permissions pattern — see `BLOCKED.md`), then **T5.2**.
 
 ### T5.2 ✔ — schedule gate + audio-state gate
 
@@ -502,5 +503,121 @@ One thing worth naming about this round: every finding was in the *gap* between
 what I tested and what I claimed, not in code I got wrong. A fake router made the
 pipeline look finished. The lesson I'm carrying to T3.2/T3.3: when a component's
 job is to *wire* other components, at least one test must use the real ones.
+
+---
+
+## Session 2 — 2026-10-31
+
+### T2.3 (part) ✔ — live smoke tests written; live run blocked by permissions
+
+`tests/test_live.py` — 4 `@pytest.mark.live` cases: a `ddgs` text search, a `ddgs`
+news search, a local-Firecrawl health + scrape, and a `/v2/search` shape probe.
+All 4 `skipif not BRIEFING_LIVE`, and all 4 verified to **skip cleanly**, so
+`make check` stays offline: `364 passed, 4 skipped`.
+
+**Local Firecrawl is up** — `curl -s -m 5 http://localhost:3002/` returns **200**,
+so the old BLOCKED.md reason (nothing listening on 3002) is resolved. The live
+*half* of the acceptance — running the 4 once and recording results — is blocked on
+a permissions pattern instead: `BRIEFING_LIVE=1 .venv/bin/pytest ...` does not match
+the `Bash(.venv/bin/pytest *)` allowlist rule because of the leading `VAR=value`
+assignment. Both allowed and `dangerouslyDisableSandbox` forms were denied; neither
+was re-tried as a variant. Details and the one-line settings fix are in
+`DENIED.md`, and `BLOCKED.md` carries the two ways to clear it. **The box stays
+unchecked** until a run actually happens.
+
+Added the `live` marker to `[tool.pytest.ini_options]`, which otherwise emitted 4
+`PytestUnknownMarkWarning`s.
+
+**Local Firecrawl shape probed by direct `curl`** (permitted by CLAUDE.md), which
+is what settled the two UNVERIFIED facts and changed the shipped code's *docs*
+rather than its logic:
+
+1. `/v2/search` returns `data` as a **mapping keyed by source type**
+   (`data.web`), **not** the flat list I first wrote the live test against. The
+   probe caught my own wrong assumption — the test now asserts the true shape, and
+   `NOTES-APIS.md` records it.
+2. Items carry `url`/`title`/`description` and **no date field**, for
+   `sources:["web"]` and `sources:["news"]` alike — so backup hits genuinely have
+   no `age`. The shipped `from_search` already left it empty, so it was *correct*
+   and only the UNVERIFIED comment needed retiring.
+
+Flagged for later: T2.2 shipped the fallback routing and normalization but **no
+concrete adapter that actually POSTs to `/v2/search`**, so `Searcher(backup=...)`
+has nothing real to be given in production. Whoever writes it must unwrap
+`data["web"]` first. That is a T2.2 wiring gap, logged, not fixed here.
+
+Next: **T3.2** `ui.py`.
+
+### T3.2 ✔ — `ui.py` Rich rendering
+
+TDD, 24 tests, `make check` green (388 passed, 4 skipped). §5 of `NOTES-APIS.md`
+is now populated with verified Rich facts, gathered by a subagent against the
+installed source rather than the docs.
+
+- Everything is a **pure function of a `Result`/`Report`/`Event`**, so the snapshot
+  tests capture exactly the bytes Rich writes with no pipeline or network.
+- Markup safety is the load-bearing property and is tested: a query or headline
+  containing `[bold]` renders literally, because everything goes through `Text`
+  and never through a markup string.
+- `plain=None` means "decide from the console", which is SPEC §3's "auto `--plain`
+  when piped": a recorded or redirected console is not a terminal, so it goes
+  plain. `--plain` forces it either way and drops colour on the console.
+- `transient = not plain`: a colored run erases the spinner block before the
+  cards (SPEC §3's design), a logged run keeps it.
+
+Four things the tests caught, worth knowing before touching this file:
+
+1. **`Text.assemble(text_part, style)` raises** `ValueError: style must not be set
+   when appending Text instance` (`text.py:992`). I had composed the card title
+   and the progress line with `assemble`, so both had to be built with `append`
+   instead. Verified the exact rule in NOTES-APIS §5.
+2. **A snippet-only page is degraded, not failed.** SPEC §3 shows ⚪ `SNIPPET`,
+   not 🔴 `FAILED`, and the page still has its search snippet — so the 🔴 branch
+   is for a page that is not ok *and* not snippet-only.
+3. **I nearly "fixed" two non-bugs.** Reading my own sample render I thought the
+   UI duplicated every line and dropped the progress lines. Both were artifacts
+   of how I called `export_text(clear=False)` over a buffer that already held
+   content, and of `transient=True` working correctly. Verified in isolation
+   (`LINE A`/`LINE B`) before changing any code.
+4. **I changed the footer to two lines and reverted it.** The one-line SPEC §3
+   format orphans its last segment when it wraps at width 100, so I split it into
+   counts + tail. That reads better but contradicts SPEC's literal layout, so it
+   came back out: SPEC is the source of truth and **T3.5 is the task that renders
+   5 scenarios and judges exactly this**. Noted there rather than decided here.
+
+Next: **T3.3** `cli.py`.
+
+#### T3.2 verifier — PASS, four findings, all fixed
+
+The `verifier` subagent PASSed the acceptance (all four badge states and the
+footer snapshot-tested via `Console(record=True, width=100)`) and found four
+concrete defects. All four were real:
+
+1. **The footer rendered `2 snippet-onlys`.** SPEC §3's literal example says
+   `2 snippet-only` — an adjective, not a plural noun. RED first (asserted SPEC's
+   wording, watched `2 snippet-onlys` appear), removed the plural, GREEN.
+2. **The markup-safety tests were toothless**, and this one is the interesting
+   one. `_render` passed `markup=False`, which renders an untrusted string
+   literally *either way* — so the `[bold]` assertions passed even against a
+   refactor that routed headings through markup strings. I proved this rather
+   than trusting the reasoning: I sabotaged `card()` to build its title from a
+   markup string and **all 24 tests still passed**. So removing `markup=False` was
+   not the fix either (I tested that too — still green, because `Text.append`
+   sanitizes brackets regardless). The actual guard is `test_a_card_carries_text_objects_not_markup_strings`,
+   which asserts the card's `Panel.renderable` is a `Text`. Verified adversarial:
+   sabotaging `card()` now fails **6** tests, not 0. Restored the code.
+3. **`NO_COLOR` had no regression test.** Added one, which immediately corrected
+   *my own* wrong assumption: I asserted `UI()` under `NO_COLOR=1` was
+   `plain=False`, but `plain` auto-detects from `is_terminal`, so a non-terminal
+   pipe is plain regardless of the env var. The meaningful property is that
+   colour goes off **without** `--plain`, which needs a forced-terminal console
+   to isolate. My test was wrong, the code was right.
+4. **A dead `_ui` helper** left in the test file from an earlier draft. Deleted.
+
+One thing I did not act on, deliberately: the footer's `1 api` is lowercase where
+SPEC's example writes `1 API` (`Method.value` is lowercase). SPEC's own example is
+internally inconsistent there, and **T3.5 is the task that renders five real
+scenarios and judges exactly this kind of polish**. Noted for it.
+
 
 
