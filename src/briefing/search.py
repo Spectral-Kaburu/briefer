@@ -85,6 +85,21 @@ class SearchResult(t.NamedTuple):
             published_at=published or _NO_DATE,
         )
 
+    @classmethod
+    def from_search(cls, hit: t.Mapping[str, t.Any]) -> SearchResult:
+        """Normalize one local-Firecrawl `/v2/search` web item.
+
+        Verified fields are `url`, `title`, `description`, `category`
+        (NOTES-APIS.md). `category` has no home in SPEC §5's five fields and is
+        dropped; no verified date field exists yet, so age stays empty.
+        """
+        return cls(
+            title=_text(hit.get("title")),
+            url=_text(hit.get("url")),
+            snippet=_text(hit.get("description")),
+            origin="search",
+        )
+
 
 def _text(value: t.Any) -> str:
     return value.strip() if isinstance(value, str) else ""
@@ -154,6 +169,7 @@ class Searcher:
         timelimit: str | None = "w",
         backoff_s: float = 0.0,
         max_retries: int = _MAX_RETRIES,
+        backup: t.Any | None = None,
     ) -> None:
         self._factory = ddgs_factory or DDGS
         self.region = region
@@ -161,6 +177,7 @@ class Searcher:
         self.timelimit = timelimit
         self.backoff_s = backoff_s
         self.max_retries = max_retries
+        self.backup = backup
 
     async def search(self, query: str) -> list[SearchResult]:
         """Search for `query`, retrying a rate-limited call once wider.
@@ -169,10 +186,26 @@ class Searcher:
         caller already has the search snippet as a fallback.
         """
         if detect_mode(query) == "news":
-            return await self._run(
+            results = await self._run(
                 lambda ddgs, limit: ddgs.news(query, **self._kwargs(limit)), "news"
             )
-        return await self._run(lambda ddgs, limit: ddgs.text(query, **self._kwargs(limit)), "text")
+        else:
+            results = await self._run(
+                lambda ddgs, limit: ddgs.text(query, **self._kwargs(limit)), "text"
+            )
+        # SPEC section 5: the local /search backup covers ddgs failing *or* being
+        # rate-limited, so a retry that came back empty routes to it too.
+        return results or await self._backup_search(query)
+
+    async def _backup_search(self, query: str) -> list[SearchResult]:
+        """One call to local Firecrawl `/search`, normalized. Never raises."""
+        if self.backup is None:
+            return []
+        try:
+            hits = await self.backup.search(query, self.max_results)
+        except Exception:  # noqa: BLE001 - a failed backup is still not fatal
+            return []
+        return [SearchResult.from_search(hit) for hit in hits]
 
     def _kwargs(self, timelimit: str | None) -> dict[str, t.Any]:
         kwargs: dict[str, t.Any] = {

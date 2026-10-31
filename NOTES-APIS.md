@@ -44,6 +44,20 @@ SPEC claim that "self-hosted search was switched to DuckDuckGo in v2.8.0" is
 **UNVERIFIED from the docs page**. Treat the backup-search task (T2.2) as needing
 a live probe against the running local instance before relying on the shape.
 
+### T2.2 additions — verified against the doc page
+
+| Item | Verified fact |
+|---|---|
+| Web result fields | `url`, `title`, `description`, `category` |
+| Scraped result fields | `title`, `description`, `url`, `markdown`, `links`, `metadata` |
+| `sources` accepts | `web`, `news`, `images`, `alexandria` |
+
+So a `sources: ["web"]` backup search maps to `SearchResult` as
+`url`→url, `title`→title, `description`→snippet. The `category` field has no home
+in SPEC §5's five fields and is dropped; news items also carry a date we could map
+to `age`, but which field name the self-hosted instance actually emits is
+UNVERIFIED until a live probe — `T2.3` is the task that runs one.
+
 ## 3. Firecrawl — error codes
 
 Verified from `https://docs.firecrawl.dev/api-reference/errors.md`.

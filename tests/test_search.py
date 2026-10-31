@@ -1,8 +1,8 @@
-"""Tests for search.py (T2.1).
+"""Tests for search.py (T2.1) and the local-Firecrawl backup (T2.2).
 
-Normalized `SearchResult`, news/text auto-detection, timelimit widening, and
-rate-limit handling with backoff. `ddgs` is injected, so nothing here hits the
-network.
+Normalized `SearchResult`, news/text auto-detection, timelimit widening,
+rate-limit handling with backoff, and the `/search` fallback. Both dependencies
+are injected, so nothing here hits the network.
 """
 
 from __future__ import annotations
@@ -11,10 +11,12 @@ import asyncio
 import typing as t
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
 from ddgs.exceptions import RatelimitException, TimeoutException
 
 from briefing.search import (
+    _NO_DATE,
     Searcher,
     SearchResult,
     detect_mode,
@@ -336,3 +338,118 @@ def test_other_errors_propagate_as_a_search_failure() -> None:
     results = asyncio.run(searcher.search("latest flooding"))
     assert results == []
     assert len(fake.news_calls) == 1  # not retried, not a rate limit
+
+
+# --- backup search via local Firecrawl /search (T2.2) ----------------------
+
+# A /v2/search web item, per NOTES-APIS.md: url, title, description, category.
+SEARCH_HIT: dict[str, t.Any] = {
+    "url": "https://example.com/e",
+    "title": "Bank raises lending rate",
+    "description": "The central bank raised rates by fifty basis points.",
+    "category": "finance",
+}
+
+
+class FakeFirecrawlSearch:
+    """Stands in for local Firecrawl `/search`, recording what it was asked."""
+
+    def __init__(
+        self,
+        *,
+        results: list[dict[str, t.Any]] | None = None,
+        raises: Exception | None = None,
+    ) -> None:
+        self._results = results if results is not None else []
+        self._raises = raises
+        self.calls: list[dict[str, t.Any]] = []
+
+    async def search(self, query: str, limit: int) -> list[dict[str, t.Any]]:
+        self.calls.append({"query": query, "limit": limit})
+        if self._raises is not None:
+            raise self._raises
+        return self._results
+
+
+def test_ddgs_success_never_touches_the_backup(fake: FakeDDGS) -> None:
+    """SPEC section 5: the backup is a fallback, not a second opinion."""
+    backup = FakeFirecrawlSearch(results=[SEARCH_HIT])
+    searcher = _searcher(ddgs_factory=lambda: fake, backup=backup, backoff_s=0)
+    results = asyncio.run(searcher.search("latest flooding"))
+    assert [r.origin for r in results] == ["news", "news"]
+    assert backup.calls == []  # never consulted
+
+
+def test_ddgs_failure_falls_back_to_local_search() -> None:
+    fake = FakeDDGS(news=[], news_raises=RuntimeError("boom"))
+    backup = FakeFirecrawlSearch(results=[SEARCH_HIT])
+    searcher = _searcher(ddgs_factory=lambda: fake, backup=backup, backoff_s=0)
+    results = asyncio.run(searcher.search("latest flooding"))
+    assert [r.title for r in results] == ["Bank raises lending rate"]
+    assert backup.calls == [{"query": "latest flooding", "limit": 10}]
+
+
+def test_backup_results_are_normalized() -> None:
+    """`description` maps to `snippet`; `category` has no SPEC §5 home and drops."""
+    fake = FakeDDGS(news=[], news_raises=RuntimeError("boom"))
+    backup = FakeFirecrawlSearch(results=[SEARCH_HIT])
+    searcher = _searcher(ddgs_factory=lambda: fake, backup=backup, backoff_s=0)
+    result = asyncio.run(searcher.search("latest flooding"))[0]
+    assert result.url == "https://example.com/e"
+    assert result.snippet == "The central bank raised rates by fifty basis points."
+    assert result.source == ""
+    assert result.origin == "search"
+
+
+def test_backup_carries_no_date_so_it_sorts_last() -> None:
+    """A /search web item has no verified date field (NOTES-APIS.md)."""
+    fake = FakeDDGS(news=[], news_raises=RuntimeError("boom"))
+    backup = FakeFirecrawlSearch(results=[SEARCH_HIT])
+    searcher = _searcher(ddgs_factory=lambda: fake, backup=backup, backoff_s=0)
+    result = asyncio.run(searcher.search("latest flooding"))[0]
+    assert result.age == ""
+    assert result.published_at == _NO_DATE
+
+
+def test_rate_limit_also_falls_back() -> None:
+    """SPEC section 5: the backup exists for when ddgs is rate-limited."""
+    fake = FakeDDGS(news=[], news_raises=RatelimitException("slow down"))
+    backup = FakeFirecrawlSearch(results=[SEARCH_HIT])
+    searcher = _searcher(ddgs_factory=lambda: fake, backup=backup, backoff_s=0)
+    results = asyncio.run(searcher.search("latest flooding"))
+    assert len(results) == 1
+    assert len(backup.calls) == 1
+
+
+def test_both_fail_returns_empty(fake: FakeDDGS) -> None:
+    backup = FakeFirecrawlSearch(raises=httpx.ConnectError("refused"))
+    searcher = _searcher(
+        ddgs_factory=lambda: FakeDDGS(news=[], news_raises=RuntimeError("boom")),
+        backup=backup,
+        backoff_s=0,
+    )
+    assert asyncio.run(searcher.search("latest flooding")) == []
+
+
+def test_backup_receives_the_original_query_not_a_widened_one() -> None:
+    fake = FakeDDGS(news=[], news_raises=RuntimeError("boom"))
+    backup = FakeFirecrawlSearch(results=[SEARCH_HIT])
+    searcher = _searcher(ddgs_factory=lambda: fake, backup=backup, backoff_s=0)
+    asyncio.run(searcher.search("latest flooding"))
+    assert backup.calls[0]["query"] == "latest flooding"
+
+
+def test_no_backup_configured_still_returns_empty() -> None:
+    fake = FakeDDGS(news=[], news_raises=RuntimeError("boom"))
+    searcher = _searcher(ddgs_factory=lambda: fake, backoff_s=0)
+    assert asyncio.run(searcher.search("latest flooding")) == []
+
+
+def test_plain_query_falls_back_too() -> None:
+    """The backup covers `text()` queries, not just news ones."""
+    fake = FakeDDGS(text=[], text_raises=RuntimeError("boom"))
+    backup = FakeFirecrawlSearch(results=[SEARCH_HIT])
+    searcher = _searcher(ddgs_factory=lambda: fake, backup=backup, backoff_s=0)
+    results = asyncio.run(searcher.search("how does a lending rate work"))
+    assert [r.origin for r in results] == ["search"]
+    assert backup.calls[0]["query"] == "how does a lending rate work"
