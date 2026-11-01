@@ -1,9 +1,9 @@
 """The `briefing` command-line interface (SPEC sections 3 and 7).
 
-`research` is the only command implemented so far; `run`, `whitelist`, `status`
-and `config` arrive with T3.4. Everything below the argument parsing is the
-dependency wiring, which lives in one place so a test can swap the pipeline (or
-the collaborators) by name rather than reaching into a running event loop.
+`research`, `whitelist`, `status` and `config` exist; `run` arrives with T5.4.
+Everything below the argument parsing is the dependency wiring, which lives in
+one place so a test can swap the pipeline (or the collaborators) by name rather
+than reaching into a running event loop.
 
 Help text uses plain Click (`rich_markup_mode=None`) rather than Rich's panel
 help: Rich wraps against a detected console width, which makes help snapshots
@@ -23,17 +23,30 @@ from rich.console import Console
 
 from briefing.config import Config, ConfigError, load_config, resolve_api_key
 from briefing.extract import Extracted, extract
-from briefing.fetch.api import ApiFirecrawl
+from briefing.fetch.api import ApiFirecrawl, usage_today
 from briefing.fetch.local import LocalFirecrawl
 from briefing.fetch.router import Router
 from briefing.pipeline import Pipeline, Report
 from briefing.search import Searcher
 from briefing.ui import UI
-from briefing.whitelist import Whitelist
+from briefing.whitelist import Whitelist, WhitelistEntry, normalize_host
 
 # The seam the CLI tests use: patching this one name swaps the whole run's
 # collaborator graph. Real code uses the real `Pipeline`.
 _PIPELINE = Pipeline
+
+
+def _STATE_DIR() -> Path:
+    """Where the whitelist, dedup store and API call log live.
+
+    Indirects `config._default_state_dir` so a test can point the whole CLI at a
+    tmp dir with one `monkeypatch.setattr`, instead of setting `BRIEFING_STATE_DIR`
+    and hoping no other test races it.
+    """
+    from briefing.config import _default_state_dir
+
+    return _default_state_dir()
+
 
 app = typer.Typer(
     help="Search the web, extract pages, and summarize the results.",
@@ -114,6 +127,174 @@ def research(
     )
 
 
+# --- whitelist (T3.4) ------------------------------------------------------
+
+whitelist_app = typer.Typer(
+    help="Manage the domains the cloud API may fetch.", no_args_is_help=True
+)
+
+
+def _store() -> Whitelist:
+    """The whitelist the config names, for the subcommands below."""
+    return _whitelist(_load(None))
+
+
+def _whitelist_line(entry: WhitelistEntry) -> str:
+    """One entry as a row of `whitelist list`, with its state spelled out."""
+    state = "verified" if entry.verified else "unverified"
+    reason = f" · {entry.reason}" if entry.reason else ""
+    return f"{entry.domain}  [{state} · {entry.source} · {entry.api_hits} api hits]{reason}"
+
+
+@whitelist_app.command(name="list")
+def whitelist_list() -> None:
+    """List whitelisted domains, and why each is there."""
+    entries = _store().list()
+    if not entries:
+        typer.echo("No domains whitelisted.")
+        return
+    for entry in entries:
+        typer.echo(_whitelist_line(entry))
+
+
+@whitelist_app.command(name="add")
+def whitelist_add(
+    domain: str = typer.Argument(..., help="Domain to allow via the API."),
+    reason: str = typer.Option("", "--reason", "-R", help="Why it is whitelisted."),
+) -> None:
+    """Whitelist a domain so the cloud API may fetch it."""
+    store = _store()
+    store.add(domain, reason, source="manual")
+    typer.echo(f"Whitelisted {normalize_host(domain)}.")
+
+
+@whitelist_app.command(name="remove")
+def whitelist_remove(
+    domain: str = typer.Argument(..., help="Domain to remove."),
+) -> None:
+    """Remove a domain from the whitelist."""
+    store = _store()
+    store.remove(domain)
+    typer.echo(f"Removed {normalize_host(domain)}.")
+
+
+@whitelist_app.command(name="prune")
+def whitelist_prune() -> None:
+    """Drop unverified auto entries — the API could not get past those."""
+    before = len(_store().list())
+    _store().prune()
+    dropped = before - len(_store().list())
+    typer.echo(f"Pruned {dropped} entr{'y' if dropped == 1 else 'ies'}.")
+
+
+app.add_typer(whitelist_app, name="whitelist")
+
+
+# --- status (T3.4) ---------------------------------------------------------
+
+
+def _ddgs_reachable() -> bool:
+    """One real `text()` query: True when ddgs answers at all.
+
+    Local Firecrawl is the backup search, so it is disabled here — otherwise a
+    working local instance would mask a dead ddgs and the row would lie.
+    """
+    try:
+        return bool(asyncio.run(_probe_ddgs()))
+    except Exception:  # noqa: BLE001 - any failure is simply "unreachable"
+        return False
+
+
+async def _probe_ddgs() -> bool:
+    from ddgs import DDGS
+
+    searcher = Searcher(ddgs_factory=DDGS, max_results=1, backup=None)
+    return bool(await searcher.search("briefing"))
+
+
+@app.command()
+def status() -> None:
+    """Health check: local Firecrawl, API key, ddgs, and today's API usage."""
+    loaded = _load(None)
+    key = resolve_api_key(loaded, os.environ)
+    used = usage_today(loaded.paths.state_dir / "api-calls.jsonl")
+    local_ok = asyncio.run(_local_firecrawl(loaded).health())
+    ddgs_ok = _ddgs_reachable()
+
+    def row(label: str, ok: bool, detail: str) -> str:
+        mark = "✔" if ok else "✘"
+        return f"{mark} {label:<13} {detail}"
+
+    lines = [
+        row(
+            "local firecrawl",
+            local_ok,
+            loaded.firecrawl.local.base_url
+            if local_ok
+            else f"{loaded.firecrawl.local.base_url} is unreachable. Run: docker compose up -d",
+        ),
+        row(
+            "api key",
+            key is not None,
+            f"{loaded.firecrawl.api.key_env} is {'set' if key else 'not set'}"
+            + ("" if key else ". Set it to use the cloud API."),
+        ),
+        row("ddgs", ddgs_ok, "reachable" if ddgs_ok else "unreachable"),
+        row(
+            "api usage",
+            used < loaded.firecrawl.api.daily_limit,
+            f"{used} of {loaded.firecrawl.api.daily_limit} calls today",
+        ),
+    ]
+    for line in lines:
+        typer.echo(line)
+
+
+# --- config (T3.4) ---------------------------------------------------------
+
+
+@app.command(name="config")
+def show_config(
+    config_file: str = typer.Option(None, "--config", help="Path to a briefing.yaml to load."),
+) -> None:
+    """Show the effective config and where it lives."""
+    loaded = _load(config_file)
+    lines = [
+        f"state dir   {loaded.paths.state_dir}",
+        f"whitelist   {loaded.paths.whitelist}",
+        f"log file    {loaded.paths.log_file}",
+        f"api calls   {loaded.paths.state_dir / 'api-calls.jsonl'}",
+        "",
+        (
+            f"search      {loaded.search.results} results · region {loaded.search.region}"
+            f" · auto news detect {loaded.search.auto_news_detect}"
+        ),
+        (
+            f"local       {loaded.firecrawl.local.base_url}"
+            f" · timeout {loaded.firecrawl.local.timeout_s}s"
+            f" · concurrency {loaded.firecrawl.local.concurrency}"
+        ),
+        (
+            f"api         {loaded.firecrawl.api.base_url}"
+            f" · key env {loaded.firecrawl.api.key_env}"
+            f" · daily limit {loaded.firecrawl.api.daily_limit}"
+        ),
+        (
+            f"whitelist   auto_add {loaded.whitelist.auto_add}"
+            f" · prefer api {loaded.whitelist.prefer_api_for_whitelisted}"
+        ),
+        f"summary     {loaded.summary.mode} · {loaded.summary.sentences} sentences",
+        (
+            f"dedup       {loaded.dedup.headline_ttl_days} day TTL"
+            f" · {loaded.dedup.schedule_window_hours}h schedule window"
+        ),
+        f"topics      {', '.join(loaded.news_topics)}",
+        f"blocklist   {', '.join(loaded.blocklist_topics)}",
+    ]
+    for line in lines:
+        typer.echo(line)
+
+
 def _research(
     query: str,
     *,
@@ -129,18 +310,14 @@ def _research(
     """Wire the collaborators from config, run the pipeline, render the report.
 
     Every failure path exits with a plain-English message and a fix hint and no
-    traceback (SPEC section 3). `ConfigError` carries its own hint; the rest
-    state the command that would fix the problem.
+    traceback (SPEC section 3); `_load` already turns a `ConfigError` into one.
     """
     if news and web:
         _fail(
             "--news and --web both set the search mode.",
             "Pick one: drop --news, or drop --web.",
         )
-    try:
-        loaded = _load(config)
-    except ConfigError as exc:
-        _fail(exc.message, exc.hint)
+    loaded = _load(config)
 
     if results is not None and results < 1:
         _fail(f"--results must be at least 1, not {results}.", "Try a value like 10.")
@@ -182,7 +359,19 @@ def _mode_for(news: bool, web: bool) -> str | None:
 
 
 def _load(config: str | None) -> Config:
-    return load_config(Path(config).expanduser() if config is not None else None)
+    """Load the config, turning a ConfigError into a clean exit.
+
+    Every command goes through here, so the SPEC §3 promise (plain-English error
+    plus fix hint, never a traceback) holds for `config` and the subcommands too
+    rather than only for `research`.
+    """
+    try:
+        return load_config(
+            Path(config).expanduser() if config is not None else None,
+            state_dir=_STATE_DIR(),
+        )
+    except ConfigError as exc:
+        _fail(exc.message, exc.hint)
 
 
 def _local_firecrawl(loaded: Config) -> LocalFirecrawl:
@@ -218,6 +407,8 @@ class Extractor:
 
 
 def _whitelist(loaded: Config) -> Whitelist:
+    # `config.whitelist.path` is relative to the state dir in the default config;
+    # `Paths.whitelist` is that path already resolved (T0.4's `_build_paths`).
     return Whitelist(loaded.paths.whitelist)
 
 

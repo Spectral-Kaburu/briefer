@@ -125,3 +125,30 @@ Rank-shifting was the alternative and is wrong: dropping should renumber the
 cards, but rank is the hit's *search* position and the UI cards are numbered from
 it — so `rank` is reassigned after `gather` settles, sequentially and in search
 order, which is the same numbering with no gap.
+
+## D15 — 2026-11-01 · Config errors are caught once, in `_load()` (T3.4)
+
+`_research` caught `ConfigError` and reported it cleanly; `config`, `status` and
+the whitelist subcommands did not, so `briefing config --config bad.yaml` exited 1
+with an empty stderr. **Decision**: the `try/except ConfigError → _fail()` guard
+lives in `_load()`, the one function every command calls to read config.
+**Reason**: SPEC §3 promises every user-facing error a plain-English message plus
+a fix hint, and four copies of the same guard is four places to forget it. The
+alternative — repeating the try/except in each command — is what produced the
+gap. `_research`'s local copy was deleted as dead code, and a test asserts
+`research` still reports cleanly *through the shared path*, so the guard cannot
+quietly fork again. Related: [[no-default-config-file]] — a `briefing.yaml` in the
+state dir is inert, because `load_config(None)` reads no file.
+
+## D16 — 2026-11-01 · No auto-discovered config file (observed, not decided; T3.4)
+
+While fixing D15 I wrote a test asserting `status` fails when a malformed
+`briefing.yaml` sits in the state dir. It failed for an unexpected reason: nothing
+reads that file. `load_config(path)` loads only the path it is given;
+`load_config(None)` returns pure defaults. SPEC §3 names no default config
+location, and T0.4 built paths (state dir, whitelist, log) but no config path.
+**Decision**: leave it explicit-only — this is T0.4's design and SPEC's, and
+silently picking up a file the user never named would be a new feature, not a
+fix. **Open question for T6.x**, not a defect: should `briefing config` report
+"no config file in use" so the owner knows defaults are in play? Logged rather
+than built, because nothing in SPEC asks for it.

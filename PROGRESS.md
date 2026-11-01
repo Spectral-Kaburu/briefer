@@ -684,8 +684,75 @@ Both halves have tests that I verified fail when the wiring is removed.
 
 **Known gap, deliberate**: `--llm` and `--synth` parse and are documented, but
 do nothing until T4.1 (optional) lands. An unknown flag is a hard error, so
-declaring them now beats omitting them; the help says "(T4.1)". Also `--config`
-accepts a path but there is no config subcommand yet — that is T3.4.
+declaring them now beats omitting them; the help says "(T4.1)". `--config` is now
+answered by the `config` subcommand (T3.4, below).
+
+### T3.4 ✔ — `whitelist` subcommands, `status`, `config`
+
+**What**: the three groups of commands SPEC §3 describes, in `cli.py`, plus
+`usage_today` in `fetch/api.py` so `status` can read the count out of the JSONL
+call log the API client writes (the in-run counter dies with the process, the
+log does not). TDD: RED first — the tests named a `_STATE_DIR` seam and a
+`_ddgs_reachable` probe that did not exist yet, so they failed with
+`AttributeError` rather than a wrong answer.
+
+`make check` green: **438 passed, 4 skipped**.
+
+- `whitelist list` prints each entry with its state (`[verified · auto · 2 api
+  hits]`) and reason, so the owner can see *why* a domain is on the list rather
+  than just that it is. An empty list says "No domains whitelisted." — an empty
+  whitelist is the normal starting state, not an error.
+- `whitelist add` normalizes the host (scheme, `www.`, port, userinfo, case all
+  stripped) and echoes the normalized form back, so pasting
+  `https://WWW.Paywalled.example:8080/a?b=1` stores `paywalled.example` and says
+  so. `--reason` is preserved on re-add (first reason wins, the entry is not
+  duplicated).
+- `status` answers all four SPEC §3 questions in one column: local Firecrawl
+  health, API key present, ddgs reachable, daily API usage against the cap.
+- `config` shows the effective values *and where they live* (state dir, whitelist
+  path, log file, call log).
+
+**Sabotage-proven, not assumed** — each of these was broken and the tests were
+watched to fail before the code was restored: dropping `--reason` fails 2 tests;
+reporting a missing key as present fails
+`test_status_says_the_key_is_missing_and_names_the_env_var`; pointing
+`usage_today` at a nonexistent filename fails
+`test_status_counts_todays_api_calls`; echoing the raw domain instead of the
+normalized one fails `test_whitelist_add_normalizes_the_host` (this one was
+found by sabotage, not by the original green run — the store normalizes
+internally, so nothing had asserted the CLI's own `normalize_host` in the echo;
+the assertion was added because the gap was real).
+
+**One thing I did not do**: I could not smoke-test the new commands through the
+real `briefing` entry point in a throwaway state dir — that Bash form was denied
+(see `DENIED.md`, 2026-11-01). `.venv/bin/briefing --help` and
+`briefing whitelist --help` were allowed and confirm all four commands register.
+The CliRunner tests exercise the same argv parsing and `typer.echo` paths, so the
+gap is "does the installed console script behave", not "is it verified".
+
+**A real bug found while reading my own output, fixed test-first**: the
+`verifier` subagent and I both hit it independently. `_research` catches
+`ConfigError` and reports it cleanly, but `config`, `status` and the whitelist
+subcommands each called `load_config` with no guard — so
+`briefing config --config ./briefing.yaml` with a malformed file exited **1 with
+nothing at all on stderr**, which is worse than a traceback: no message, no fix
+hint, exit code that says "failed" without saying why.
+
+The fix is one place rather than four: `_load()` now catches `ConfigError` and
+calls `_fail()`, and `_research`'s local try/except came out as dead code. Two
+tests were added — one for `config`, one asserting `research` still reports
+cleanly through the new path (proving the guard is genuinely shared, not
+duplicated). Verified RED by reverting `_load` to the unguarded form: both fail.
+
+Worth recording the near-miss that came with it: I first wrote a test asserting
+`status` fails on a malformed `briefing.yaml` left in the state dir. It failed,
+and investigating showed `load_config(path=None)` **reads no file at all** —
+config is explicit-only by T0.4's design, and SPEC §3 names no auto-discovered
+config path. So there was no bug to fix there; the test was written against a
+behaviour that was never specified. Deleted it rather than building the feature.
+A `briefing.yaml` sitting in the state dir is inert, which is worth knowing but
+is a *design question* (should there be a default config location?), not a T3.4
+defect — logged here for T6.x.
 
 
 

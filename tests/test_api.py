@@ -255,3 +255,61 @@ def test_call_record_is_typed() -> None:
     )
     assert record.domain == "a.example"
     assert record.ts
+
+
+# --- daily usage (for `briefing status`) ------------------------------------
+
+
+def test_daily_usage_counts_todays_rows(tmp_path: object) -> None:
+    from datetime import datetime, timedelta
+    from pathlib import Path
+
+    from briefing.fetch.api import usage_today
+
+    log = Path(str(tmp_path)) / "api_calls.jsonl"
+    now = datetime.now().astimezone()
+    rows = [
+        {
+            "ts": now.isoformat(timespec="seconds"),
+            "url": "https://a.example/x",
+            "domain": "a.example",
+            "reason": "captcha",
+            "outcome": "success",
+        },
+        {
+            "ts": now.isoformat(timespec="seconds"),
+            "url": "https://b.example/y",
+            "domain": "b.example",
+            "reason": "captcha",
+            "outcome": "capped",
+        },
+        # Yesterday: same log, outside today's window.
+        {
+            "ts": (now - timedelta(days=1)).isoformat(timespec="seconds"),
+            "url": "https://c.example/z",
+            "domain": "c.example",
+            "reason": "captcha",
+            "outcome": "success",
+        },
+    ]
+    log.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    assert usage_today(log, now=now) == 2
+
+
+def test_daily_usage_of_an_absent_log_is_zero(tmp_path: object) -> None:
+    from pathlib import Path
+
+    from briefing.fetch.api import usage_today
+
+    assert usage_today(Path(str(tmp_path)) / "no-such.jsonl") == 0
+
+
+def test_daily_usage_of_a_malformed_log_is_zero(tmp_path: object) -> None:
+    """A corrupt line must not break `status` — it reports what it can read."""
+    from pathlib import Path
+
+    from briefing.fetch.api import usage_today
+
+    log = Path(str(tmp_path)) / "api_calls.jsonl"
+    log.write_text('{"ts": "not a date"}\nnot json at all\n', encoding="utf-8")
+    assert usage_today(log) == 0

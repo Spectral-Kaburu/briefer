@@ -1,9 +1,10 @@
-"""Tests for cli.py (T3.3): the Typer CLI surface, run offline.
+"""Tests for cli.py (T3.3, T3.4): the Typer CLI surface, run offline.
 
 Every test drives `runner.invoke(app, ...)` with the pipeline substituted through
-`monkeypatch`, so no search, fetch, or network happens here. What is under test is
-the CLI's own job: parsing the flags SPEC section 3 names, wiring them into the
-pipeline, and rendering the report as cards or as JSON.
+`monkeypatch`, and the state dir pointed at a tmp dir, so no search, fetch, or
+network happens here. What is under test is the CLI's own job: parsing the flags
+SPEC section 3 names, wiring them into the pipeline, and rendering the report as
+cards or as JSON.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import typing as t
+from datetime import datetime
 
 from typer.testing import CliRunner
 
@@ -18,6 +20,7 @@ import briefing.cli as cli_module
 from briefing.cli import app
 from briefing.fetch.router import ErrorClass, Method
 from briefing.pipeline import Report, Result
+from briefing.whitelist import Whitelist
 
 runner = CliRunner()
 
@@ -346,3 +349,237 @@ def test_the_extractor_exposes_the_method_the_pipeline_calls() -> None:
     extracted = Extractor().extract("# A heading\n\nSome prose.", url="https://e.co.ke/x")
     assert extracted.heading
     assert extracted.summary
+
+
+# --- whitelist subcommands (T3.4) ------------------------------------------
+
+
+def test_whitelist_list_shows_stored_entries(tmp_path: t.Any, monkeypatch: t.Any) -> None:
+    store = Whitelist(tmp_path / "whitelist.yaml")
+    store.add("example.co.ke", "captcha", source="auto")
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    result = runner.invoke(app, ["whitelist", "list"])
+    assert result.exit_code == 0, result.stderr
+    assert "example.co.ke" in result.stdout
+    assert "captcha" in result.stdout
+
+
+def test_whitelist_list_of_an_empty_store_says_so(tmp_path: t.Any, monkeypatch: t.Any) -> None:
+    """An empty whitelist is a normal state, not an error."""
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    result = runner.invoke(app, ["whitelist", "list"])
+    assert result.exit_code == 0, result.stderr
+    assert "no domains" in result.stdout.lower()
+
+
+def test_whitelist_add_records_the_domain(tmp_path: t.Any, monkeypatch: t.Any) -> None:
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    result = runner.invoke(app, ["whitelist", "add", "paywalled.example", "--reason", "paywall"])
+    assert result.exit_code == 0, result.stderr
+    entries = {e.domain: e for e in Whitelist(tmp_path / "whitelist.yaml").list()}
+    assert "paywalled.example" in entries
+    assert entries["paywalled.example"].source == "manual"
+    assert entries["paywalled.example"].reason == "paywall"
+
+
+def test_whitelist_add_normalizes_the_host(tmp_path: t.Any, monkeypatch: t.Any) -> None:
+    """SPEC section 4: entries are hosts without scheme, www, or port."""
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    result = runner.invoke(app, ["whitelist", "add", "https://WWW.Paywalled.example:8080/a?b=1"])
+    assert result.exit_code == 0, result.stderr
+    domains = [e.domain for e in Whitelist(tmp_path / "whitelist.yaml").list()]
+    assert domains == ["paywalled.example"]
+    # The echo repeats the normalized host back, not the raw argument: a user who
+    # pasted a URL needs to see what was actually stored.
+    assert "paywalled.example" in result.stdout.lower()
+    assert "8080" not in result.stdout
+
+
+def test_whitelist_add_is_idempotent(tmp_path: t.Any, monkeypatch: t.Any) -> None:
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    runner.invoke(app, ["whitelist", "add", "a.example", "--reason", "first"])
+    runner.invoke(app, ["whitelist", "add", "a.example", "--reason", "second"])
+    entries = Whitelist(tmp_path / "whitelist.yaml").list()
+    assert [e.domain for e in entries] == ["a.example"]
+    assert entries[0].reason == "first"
+
+
+def test_whitelist_remove_drops_the_domain(tmp_path: t.Any, monkeypatch: t.Any) -> None:
+    store = Whitelist(tmp_path / "whitelist.yaml")
+    store.add("gone.example", "captcha")
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    result = runner.invoke(app, ["whitelist", "remove", "gone.example"])
+    assert result.exit_code == 0, result.stderr
+    assert Whitelist(tmp_path / "whitelist.yaml").is_whitelisted("gone.example") is False
+
+
+def test_whitelist_remove_of_an_absent_domain_is_not_an_error(
+    tmp_path: t.Any, monkeypatch: t.Any
+) -> None:
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    result = runner.invoke(app, ["whitelist", "remove", "never-there.example"])
+    assert result.exit_code == 0, result.stderr
+
+
+def test_whitelist_prune_drops_unverified_auto_entries(tmp_path: t.Any, monkeypatch: t.Any) -> None:
+    """SPEC section 4: the API could not get past these, so they are noise."""
+    store = Whitelist(tmp_path / "whitelist.yaml")
+    store.add("unverified.example", "captcha", source="auto")
+    store.add("manual.example", "owner asked", source="manual")
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    result = runner.invoke(app, ["whitelist", "prune"])
+    assert result.exit_code == 0, result.stderr
+    remaining = [e.domain for e in Whitelist(tmp_path / "whitelist.yaml").list()]
+    assert remaining == ["manual.example"]
+
+
+def test_whitelist_prune_keeps_verified_entries(tmp_path: t.Any, monkeypatch: t.Any) -> None:
+    """A verified entry earned its place: the API succeeded on it once."""
+    store = Whitelist(tmp_path / "whitelist.yaml")
+    store.add("verified.example", "captcha", source="auto")
+    store.record_api_call("verified.example", success=True)
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    result = runner.invoke(app, ["whitelist", "prune"])
+    assert result.exit_code == 0, result.stderr
+    assert Whitelist(tmp_path / "whitelist.yaml").is_whitelisted("verified.example")
+
+
+# --- status (T3.4) ---------------------------------------------------------
+
+
+def _status_env(monkeypatch: t.Any, tmp_path: t.Any) -> None:
+    """An isolated state dir, with the network probes stubbed out."""
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    monkeypatch.setattr(cli_module, "_ddgs_reachable", lambda: True)
+
+
+def test_status_reports_every_check_spec_section_3_names(
+    monkeypatch: t.Any, tmp_path: t.Any
+) -> None:
+    _status_env(monkeypatch, tmp_path)
+    result = runner.invoke(app, ["status"])
+    assert result.exit_code == 0, result.stderr
+    lowered = result.stdout.lower()
+    assert "local firecrawl" in lowered
+    assert "api key" in lowered
+    assert "ddgs" in lowered
+    assert "api usage" in lowered
+
+
+def test_status_names_the_local_url_when_it_is_unreachable(
+    monkeypatch: t.Any, tmp_path: t.Any
+) -> None:
+    """SPEC section 3: errors carry a fix hint, and this one names the port."""
+    _status_env(monkeypatch, tmp_path)
+    result = runner.invoke(app, ["status"])
+    assert result.exit_code == 0, result.stderr
+    assert "localhost:3002" in result.stdout
+
+
+def test_status_says_the_key_is_missing_and_names_the_env_var(
+    monkeypatch: t.Any, tmp_path: t.Any
+) -> None:
+    _status_env(monkeypatch, tmp_path)
+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+    result = runner.invoke(app, ["status"])
+    assert result.exit_code == 0, result.stderr
+    assert "FIRECRAWL_API_KEY" in result.stdout
+    assert "not set" in result.stdout.lower()
+
+
+def test_status_says_the_key_is_present_without_printing_it(
+    monkeypatch: t.Any, tmp_path: t.Any
+) -> None:
+    """The key must never appear in output (CLAUDE.md: no secrets in output)."""
+    _status_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-secret-key-123")
+    result = runner.invoke(app, ["status"])
+    assert result.exit_code == 0, result.stderr
+    assert "fc-secret-key-123" not in result.stdout
+    assert "set" in result.stdout.lower()
+
+
+def test_status_counts_todays_api_calls(monkeypatch: t.Any, tmp_path: t.Any) -> None:
+    _status_env(monkeypatch, tmp_path)
+    log = tmp_path / "api-calls.jsonl"
+    stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    log.write_text(
+        f'{{"ts": "{stamp}", "url": "https://a.example/x", "domain": "a.example",'
+        f' "reason": "captcha", "outcome": "success"}}\n',
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["status"])
+    assert result.exit_code == 0, result.stderr
+    assert "1" in result.stdout
+
+
+# --- config (T3.4) ---------------------------------------------------------
+
+
+def test_config_shows_effective_values_and_where_they_live(
+    monkeypatch: t.Any, tmp_path: t.Any
+) -> None:
+    """SPEC section 3: "Show effective config and where it lives"."""
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    result = runner.invoke(app, ["config"])
+    assert result.exit_code == 0, result.stderr
+    assert str(tmp_path) in result.stdout
+    lowered = result.stdout.lower()
+    assert "results" in lowered
+    assert "region" in lowered
+
+
+def test_config_names_the_api_key_env_var_without_its_value(
+    monkeypatch: t.Any, tmp_path: t.Any
+) -> None:
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-secret-key-123")
+    result = runner.invoke(app, ["config"])
+    assert result.exit_code == 0, result.stderr
+    assert "FIRECRAWL_API_KEY" in result.stdout
+    assert "fc-secret-key-123" not in result.stdout
+
+
+def test_config_honours_an_explicit_file(monkeypatch: t.Any, tmp_path: t.Any) -> None:
+    """`--config` also applies to `briefing config`, not just `research`."""
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    source = tmp_path / "briefing.yaml"
+    source.write_text("search:\n  results: 42\n", encoding="utf-8")
+    result = runner.invoke(app, ["config", "--config", str(source)])
+    assert result.exit_code == 0, result.stderr
+    assert "42" in result.stdout
+
+
+# --- a broken config file is every command's problem (spec §3) --------------
+
+
+def _broken_config(tmp_path: t.Any) -> t.Any:
+    bad = tmp_path / "briefing.yaml"
+    bad.write_text("news_topics: 5\n", encoding="utf-8")
+    return bad
+
+
+def test_a_broken_config_file_fails_config_with_a_message(
+    monkeypatch: t.Any, tmp_path: t.Any
+) -> None:
+    """`research` already reports this cleanly (SPEC §3); no other command may
+    exit with a bare code and nothing said."""
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    result = runner.invoke(app, ["config", "--config", str(_broken_config(tmp_path))])
+    assert result.exit_code != 0
+    assert "Traceback" not in result.stderr
+    assert result.stderr.strip()  # not a bare exit code with nothing said
+    assert "news_topics" in result.stderr
+    assert "Fix" in result.stderr
+
+
+def test_a_broken_config_file_fails_research_with_a_message(
+    monkeypatch: t.Any, tmp_path: t.Any
+) -> None:
+    """The guard has to live in one place, so this stays green through it."""
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    result = runner.invoke(
+        app, ["research", "kenya news", "--config", str(_broken_config(tmp_path))]
+    )
+    assert result.exit_code != 0
+    assert "news_topics" in result.stderr

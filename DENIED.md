@@ -56,6 +56,15 @@ Commands the sandbox denied, in `command — why it was needed` form.
   owner**; just expect any write aimed outside `/home/spectre/Documents/morning`
   to be refused.
 
+## 2026-11-01
+
+- `BRIEFING_STATE_DIR=/tmp/briefing-smoke .venv/bin/briefing whitelist add ...` — I wanted
+  one manual smoke run of the new T3.4 subcommands against a throwaway state dir, to read
+  the output as a user sees it rather than only through CliRunner assertions. The
+  `CliRunner` tests cover the same code path (same argv parsing, same `typer.echo`),
+  so nothing is unverified — only the "does the real entry point behave" question is,
+  which `.venv/bin/briefing --help` in the allowlist would also answer. Not blocking.
+
 ## Not a denial, but blocking: local Firecrawl is not running
 
 `curl -s -m 5 http://localhost:3002/` returns exit 7 (`connection refused`),

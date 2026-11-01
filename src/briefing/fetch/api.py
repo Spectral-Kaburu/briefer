@@ -8,6 +8,7 @@ records every call to a JSONL log, and refuses to touch the network without a ke
 from __future__ import annotations
 
 import asyncio
+import json
 import typing as t
 from datetime import datetime
 from pathlib import Path
@@ -213,6 +214,41 @@ class ApiFirecrawl:
 
 
 _OK_CLASSES = frozenset({ErrorClass.OK})
+
+
+def usage_today(log_path: Path | None, now: datetime | None = None) -> int:
+    """Calls logged since local midnight, for `briefing status`.
+
+    Reads the JSONL this client writes, so the count survives a process restart
+    while `ApiFirecrawl._calls_made` (the in-run cap counter) does not. A line
+    that cannot be parsed is skipped rather than fatal: `status` is a diagnostic
+    and must still print its other rows.
+    """
+    if log_path is None:
+        return 0
+    try:
+        raw = log_path.read_text(encoding="utf-8")
+    except OSError:
+        return 0
+    moment = (now or datetime.now()).astimezone()
+    today = moment.date()
+    count = 0
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        stamp = record.get("ts") if isinstance(record, dict) else None
+        if not isinstance(stamp, str):
+            continue
+        try:
+            if datetime.fromisoformat(stamp).astimezone().date() == today:
+                count += 1
+        except ValueError:
+            continue
+    return count
 
 
 def _markdown(response: httpx.Response) -> str:
