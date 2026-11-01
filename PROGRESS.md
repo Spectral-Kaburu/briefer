@@ -802,8 +802,31 @@ see rather than a pathological stress case.
 
 **Known limit, deliberately left**: `prose = summary or snippet` means a page
 with both shows only the summary. That is correct — the snippet is the fallback,
-not a second body — but it does mean a snippet the summarizer contradicted stays
+not a second body — but it does mean a snippet the summariser contradicted stays
 invisible. Recorded, not changed.
+
+**Review passed (reviewer subagent).** It confirmed the deliverable is
+reproducible (regenerating produces byte-identical output) and independently
+agreed that 🔴 FAILED is unreachable from the real pipeline, tracing every path
+in `router.py` and `pipeline.py`. It also found a gap the samples had: nothing
+rendered the live progress block, so SPEC section 3's "one spinner line per URL"
+was implemented and tested but never demonstrated. Both fixed below.
+
+**Bug 5 — the progress line ran into the first card.** `UI.show()` stopped the
+Live block and printed cards immediately, but a non-terminal Live leaves the
+cursor where its last update ended, *without* the newline a normal print emits.
+So a piped `--plain` run wrote `✔ LOCAL  nation.africa╭──────...` — the card
+border welded to the last progress line. Only bites on a non-terminal console
+and only when the progress lines survive (`transient=False`, i.e. plain): a
+terminal clears the live area on stop and takes the cursor with it. Found as a
+side effect of adding the progress block to the samples, then confirmed as a
+real piped-run defect rather than a recording artefact with a four-way
+`force_terminal` × `plain` probe. Fixed with one `self.console.line()` guarded
+on `not self.console.is_terminal`, so terminal bytes are unchanged. New test
+`test_a_logged_progress_line_ends_before_the_first_card_starts` (watched RED,
+captured output showed the actual weld). The samples now render `ui.on_event`
+per result before the cards, so the deliverable shows the whole run, not just
+its end state.
 
 
 
