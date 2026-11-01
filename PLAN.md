@@ -52,7 +52,7 @@ Skills: `superpowers:test-driven-development`
 - [x] **T5.1** `briefing.py` filters: topic blocklist (crypto/finance speculation) and headline-hash dedup store with 7-day TTL (`seen_headlines.json`, atomic writes). *Accept*: unit tests incl. TTL expiry.
 - [x] **T5.2** `schedule_id` 24h gate + audio-state gate behind an injectable `AudioState` provider (interface plus a file/stub implementation; document what Aether must supply). *Accept*: tests for fired-today, speaking, open gate.
 - [x] **T5.3** `prompts/briefing.txt` + synthesis call (name, session summary, headlines → 2-3 spoken sentences, under ~45s), with plain-greeting fallback if all fetching fails. *Accept*: mocked tests incl. fallback.
-- [ ] **T5.4** `deliver.py`: `voice-tts -s aether -p high "<text>"` through an injectable runner, `--dry-run` prints the command. `briefing run` command wires everything. *Accept*: tests with a fake runner; never executes `voice-tts`.
+- [x] **T5.4** `deliver.py`: `voice-tts -s aether -p high "<text>"` through an injectable runner, `--dry-run` prints the command. `briefing run` command wires everything. *Accept*: tests with a fake runner; never executes `voice-tts`.
 
 ## Phase 6: Hardening and docs
 Skills: `superpowers:verification-before-completion`, `superpowers:requesting-code-review`
