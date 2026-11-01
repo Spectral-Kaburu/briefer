@@ -385,6 +385,8 @@ def _research(
         router=_router(loaded, no_api, whitelist),
         extractor=Extractor(loaded.summary.sentences),
         whitelist=whitelist,
+        concurrency=loaded.firecrawl.local.concurrency,
+        timeout_s=loaded.timeouts.per_url_s,
     )
     if ui is not None:
         # The header names the mode the run will actually use, not a second guess.
@@ -533,11 +535,13 @@ def _router(loaded: Config, no_api: bool, whitelist: Whitelist) -> Router:
             base_url=loaded.firecrawl.api.base_url,
             api_key=key,
             daily_limit=loaded.firecrawl.api.daily_limit,
+            timeout_s=loaded.firecrawl.api.timeout_s,
             log_path=loaded.paths.state_dir / "api-calls.jsonl",
         ),
         whitelist=whitelist,
         no_api=no_api,
         prefer_api_for_whitelisted=loaded.whitelist.prefer_api_for_whitelisted,
+        backoff_s=loaded.timeouts.transient_backoff_s,
     )
 
 
@@ -575,6 +579,9 @@ def _as_json(report: Report) -> dict[str, t.Any]:
                 "method": result.method.value,
                 "ok": result.ok,
                 "error_class": result.error_class.name,
+                # SPEC section 4's reason, so a consumer sees what the terminal
+                # sees rather than inferring it from `method` alone.
+                "warning": result.warning,
             }
             for result in report.results
         ],

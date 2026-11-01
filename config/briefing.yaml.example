@@ -30,6 +30,8 @@ firecrawl:
     key_env: FIRECRAWL_API_KEY
     # Hard cap on API calls per day; at the cap, fetches degrade to snippet-only.
     daily_limit: 20
+    # Seconds before an API call is abandoned.
+    timeout_s: 30
 
 whitelist:
   # Auto-whitelist a domain when local extraction hit a barrier (captcha, 403,
@@ -52,3 +54,15 @@ dedup:
   headline_ttl_days: 7
   # Don't re-fire the same schedule_id within this window.
   schedule_window_hours: 24
+
+# Timing bounds (SPEC section 4). Raise them on a slow link, lower them to fail
+# fast; both are only defaults, so delete what you don't need to change.
+timeouts:
+  # Bound on one URL's fetch (local, plus any API retry). 0 means "no bound".
+  per_url_s: 30
+  # Pause before the one local retry SPEC allows for a transient 5xx.
+  transient_backoff_s: 0.5
+
+# Briefing mode: who the spoken briefing addresses.
+briefing:
+  name: Aether

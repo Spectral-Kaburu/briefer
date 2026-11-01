@@ -13,6 +13,7 @@ import dataclasses
 import json
 import typing as t
 from datetime import datetime
+from pathlib import Path
 
 from typer.testing import CliRunner
 
@@ -233,6 +234,61 @@ def test_json_output_is_valid_json(monkeypatch: t.Any) -> None:
     assert payload["whitelisted"] == [["example.co.ke", "captcha"]]
 
 
+# --- configurable timing (T6.1) --------------------------------------------
+
+
+def _timing_config(tmp_path: t.Any, text: str) -> Path:
+    path = tmp_path / "briefing.yaml"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_the_pipeline_gets_its_configured_timeout(monkeypatch: t.Any, tmp_path: t.Any) -> None:
+    """SPEC section 4's per-URL timeout must be tunable without editing source."""
+    _configure(_report(), monkeypatch)
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    config = _timing_config(tmp_path, "timeouts: {per_url_s: 7}")
+    result = runner.invoke(app, ["research", "kenya news", "--config", str(config)])
+    assert result.exit_code == 0, result.stdout
+    assert FakePipeline.built["timeout_s"] == 7
+
+
+def test_the_router_gets_its_configured_backoff(tmp_path: t.Any) -> None:
+    """The one retry SPEC allows for a transient 5xx sleeps this long."""
+    from briefing.config import load_config
+    from briefing.whitelist import Whitelist
+
+    config = _timing_config(tmp_path, "timeouts: {transient_backoff_s: 2}")
+    loaded = load_config(config, state_dir=tmp_path)
+    router = cli_module._router(loaded, no_api=False, whitelist=Whitelist(tmp_path / "w.yaml"))
+    assert router.backoff_s == 2
+
+
+def test_the_api_client_gets_its_configured_timeout(tmp_path: t.Any) -> None:
+    """A slow API route must be tunable without editing source (T6.1)."""
+    from briefing.config import load_config
+    from briefing.whitelist import Whitelist
+
+    config = _timing_config(tmp_path, "firecrawl:\n  api:\n    timeout_s: 12")
+    loaded = load_config(config, state_dir=tmp_path)
+    router = cli_module._router(loaded, no_api=False, whitelist=Whitelist(tmp_path / "w.yaml"))
+    assert router.api.timeout_s == 12
+
+
+def test_the_pipeline_gets_its_configured_concurrency(monkeypatch: t.Any, tmp_path: t.Any) -> None:
+    """SPEC section 2: "default 5 at a time", carried by config.
+
+    The key was displayed by `briefing config` but never reached the pipeline,
+    so setting it changed nothing — a worse outcome than not offering it.
+    """
+    _configure(_report(), monkeypatch)
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    config = _timing_config(tmp_path, "firecrawl:\n  local:\n    concurrency: 2")
+    result = runner.invoke(app, ["research", "kenya news", "--config", str(config)])
+    assert result.exit_code == 0, result.stdout
+    assert FakePipeline.built["concurrency"] == 2
+
+
 def test_json_output_carries_no_rich_decorations(monkeypatch: t.Any) -> None:
     _configure(_report(), monkeypatch)
     result = runner.invoke(app, ["research", "kenya news", "--json"])
@@ -250,6 +306,24 @@ def test_json_output_says_how_each_page_was_fetched(monkeypatch: t.Any) -> None:
     _configure(report, monkeypatch)
     payload = json.loads(runner.invoke(app, ["research", "kenya news", "--json"]).stdout)
     assert [r["method"] for r in payload["results"]] == ["local", "api"]
+
+
+def test_json_output_carries_the_reason_a_page_degraded(monkeypatch: t.Any) -> None:
+    """SPEC section 4: an Aether consumer needs the same reason the terminal gets."""
+    report = _report()
+    report.results.append(
+        dataclasses.replace(
+            _result(),
+            rank=2,
+            domain="example.co.ke",
+            method=Method.SNIPPET,
+            ok=False,
+            warning="page not found (HTTP 404)",
+        )
+    )
+    _configure(report, monkeypatch)
+    payload = json.loads(runner.invoke(app, ["research", "kenya news", "--json"]).stdout)
+    assert payload["results"][1]["warning"] == "page not found (HTTP 404)"
 
 
 # --- plain ---------------------------------------------------------------

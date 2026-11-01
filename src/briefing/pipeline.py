@@ -67,6 +67,8 @@ class Result:
     method: Method
     ok: bool
     error_class: ErrorClass = ErrorClass.OK
+    #: Why this page degraded (SPEC section 4). Empty on a clean local success.
+    warning: str = ""
 
 
 @dataclasses.dataclass
@@ -324,6 +326,7 @@ def _assembled(
         method=fetched.method,
         ok=fetched.ok,
         error_class=fetched.error_class,
+        warning=fetched.warning,
     )
 
 
@@ -342,4 +345,5 @@ def _failed(hit: SearchResult, rank: int, error_class: ErrorClass, warning: str)
         method=Method.SNIPPET,
         ok=False,
         error_class=error_class,
+        warning=warning,
     )

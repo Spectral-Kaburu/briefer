@@ -31,6 +31,9 @@ def test_defaults_match_spec_sketch() -> None:
     assert cfg.blocklist_topics == ["crypto", "bitcoin", "trading", "forex", "stocks"]
     assert cfg.dedup.headline_ttl_days == 7
     assert cfg.dedup.schedule_window_hours == 24
+    assert cfg.timeouts.per_url_s == 30.0
+    assert cfg.timeouts.transient_backoff_s == 0.5
+    assert cfg.firecrawl.api.timeout_s == 30.0
 
 
 # --- overrides --------------------------------------------------------------
@@ -46,6 +49,12 @@ def test_defaults_match_spec_sketch() -> None:
         ("summary: {mode: llm}", "summary.mode", "llm"),
         ("dedup: {headline_ttl_days: 1}", "dedup.headline_ttl_days", 1),
         ("whitelist: {auto_add: false}", "whitelist.auto_add", False),
+        ("timeouts: {per_url_s: 5}", "timeouts.per_url_s", 5),
+        ("firecrawl:\n  api:\n    timeout_s: 12", "firecrawl.api.timeout_s", 12),
+        # 0 opts out of the per-URL bound, so it must survive loading: a falsy
+        # value read as "unset" would silently re-impose the default.
+        ("timeouts: {per_url_s: 0}", "timeouts.per_url_s", 0),
+        ("timeouts: {transient_backoff_s: 2}", "timeouts.transient_backoff_s", 2),
     ],
 )
 def test_yaml_overrides_apply(tmp_path: t.Any, yaml_text: str, attr: str, expected: object) -> None:

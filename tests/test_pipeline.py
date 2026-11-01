@@ -556,6 +556,8 @@ def test_a_stalled_url_is_bounded_even_without_an_explicit_timeout() -> None:
     pipeline.timeout_s = _SHORT_TIMEOUT_S
     report = asyncio.run(asyncio.wait_for(pipeline.run("latest flooding"), 5))
     assert report.results[0].error_class == ErrorClass.TRANSIENT_5XX
+    # T6.1: the reason must reach the user, not only the enum.
+    assert "Timed out" in report.results[0].warning
 
 
 def test_progress_reports_are_shared_not_rebuilt() -> None:
@@ -838,3 +840,27 @@ def _page(url: str, markdown: str = _API_MARKDOWN) -> dict[str, t.Any]:
         "html": "",
         "links": [],
     }
+
+
+# --- the reason reaches the user (T6.1) --------------------------------------
+
+
+def test_a_degraded_result_carries_the_routers_warning() -> None:
+    """SPEC section 4: the reason a page degraded must reach the user.
+
+    The router composes this per failure class; `_assembled` used to drop it, so
+    a run of snippet-only results showed a badge and no reason at all.
+    """
+    router = FakeRouter(
+        {
+            "https://a.example/x": FetchResult(
+                method=Method.SNIPPET,
+                ok=False,
+                error_class=ErrorClass.DEAD,
+                warning="page not found (HTTP 404)",
+            )
+        }
+    )
+    pipeline = Pipeline(searcher=FakeSearcher(hits=[HIT]), router=router, extractor=FakeExtractor())
+    [result] = asyncio.run(pipeline.run("latest flooding")).results
+    assert result.warning == "page not found (HTTP 404)"

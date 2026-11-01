@@ -866,5 +866,18 @@ gate regression fails the test instead of broadcasting audio — verified by
 re-running the sabotage with the hardened tests. Suite: 491 passed, 4 skipped,
 ruff clean; verifier VERIFIED.
 
+**T6.1 (2026-11-02)**: the error-path sweep closed a delivery gap rather than a
+classification one — `classify` already produced a reason per SPEC section 4 class,
+but `Result` had no `warning` field and `_failed` took and discarded its `warning`
+argument, so all 7 classes were silently dropped between the router and the user.
+`Result.warning` now carries the reason to both render surfaces (`ui.card()` as
+inert `Text`, and `_as_json`). Fix hints were added only for the three classes
+where the user can act — CONFIG, LOCAL_DOWN and API_SIDE — because a "fix" for
+"page not found" would be noise. Timing is now configurable: `timeouts.per_url_s`,
+`timeouts.transient_backoff_s` and a new `firecrawl.api.timeout_s` (the API client
+had 30s baked in), plus `firecrawl.local.concurrency`, which `briefing config`
+displayed but never passed to the pipeline. Suite: 510 passed, 4 skipped;
+`make check` green; verifier VERIFIED.
+
 
 

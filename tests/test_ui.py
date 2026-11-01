@@ -192,6 +192,37 @@ def test_a_card_is_markup_safe() -> None:
     assert "[b]summary[/b]" in out
 
 
+def test_a_card_says_why_the_page_degraded() -> None:
+    """SPEC section 4's whole point: the reason must reach the reader.
+
+    The router composes one per failure class; until T6.1 it was dropped between
+    the router and the card, so a snippet-only page showed a badge and no reason.
+    """
+    result = _result(
+        ok=False, method=Method.SNIPPET, summary="", warning="page not found (HTTP 404)"
+    )
+    out = _render(card(result, plain=False))
+    assert "page not found (HTTP 404)" in out
+
+
+def test_a_card_warning_is_not_rendered_as_markup() -> None:
+    """The reason quotes the target's own response body, so it is untrusted."""
+    result = _result(
+        ok=False,
+        method=Method.SNIPPET,
+        summary="",
+        warning="the site says [bold]blocked[/bold]",
+    )
+    out = _render(card(result, plain=False))
+    assert "[bold]blocked[/bold]" in out
+
+
+def test_a_clean_result_carries_no_warning_line() -> None:
+    """A locally-extracted page has nothing to explain."""
+    out = _render(card(_result(), plain=False))
+    assert "snippet only" not in out.lower()
+
+
 def test_the_footer_uses_specs_wording_for_two_snippet_only_pages() -> None:
     """SPEC section 3 writes "2 snippet-only", not "2 snippet-onlys"."""
     report = _report(

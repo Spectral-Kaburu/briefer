@@ -204,6 +204,28 @@ def test_api_side_errors_when_origin_is_api(status: int, code: str | None) -> No
     )
 
 
+# --- every actionable failure says what to do (T6.1) ----------------------
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "action"),
+    [
+        # SPEC row 5: CONFIG is named as "show config error with fix hint".
+        ({"status": 401, "content": GOOD, "origin": Origin.LOCAL}, "config"),
+        ({"status": 407, "content": GOOD, "origin": Origin.LOCAL}, "config"),
+        # SPEC row 6: the user is the only one who can start Firecrawl.
+        ({"exc": httpx.ConnectError, "origin": Origin.LOCAL}, "Firecrawl"),
+        # SPEC row 7: credits and the daily cap are the user's to raise.
+        ({"status": 402, "content": GOOD, "origin": Origin.API}, "credits"),
+    ],
+)
+def test_a_failure_the_user_can_fix_says_how(kwargs: dict[str, object], action: str) -> None:
+    """CLAUDE.md: every user-facing error carries a plain-English message plus a
+    fix hint. These three classes are the ones with an action, so their reason
+    must name it rather than leaving the reader to guess."""
+    assert action.lower() in _classify(**kwargs).reason.lower()
+
+
 # --- origin overlap: the same status, two classes -------------------------
 
 

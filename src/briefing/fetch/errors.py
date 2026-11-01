@@ -192,7 +192,11 @@ def classify(
     # Rule 1: API-side errors always outrank everything else, because when the
     # API is refusing (credits, rate limit, auth) nothing else can be tried.
     if origin is Origin.API and (status in _API_SIDE_STATUSES or code == "insufficient_credits"):
-        return Classification(ErrorClass.API_SIDE, "cloud API refused the request")
+        return Classification(
+            ErrorClass.API_SIDE,
+            "cloud API refused the request; check the API key, the credits left, "
+            "and the daily call limit in your config",
+        )
 
     # Rule 2: dead and not-solvable are decided before connection errors, because
     # a 404 or a 451 is a real answer about the page, not a transport failure.
@@ -232,9 +236,16 @@ def classify(
         # out mid-scrape is a barrier. Both are timeouts, so test the specific
         # classes before the general ones.
         if issubclass(exc_type, httpx.ConnectTimeout):
-            return Classification(ErrorClass.LOCAL_DOWN, "could not reach local Firecrawl in time")
+            return Classification(
+                ErrorClass.LOCAL_DOWN,
+                "could not reach local Firecrawl in time; start it or raise "
+                "firecrawl.local.timeout_s",
+            )
         if issubclass(exc_type, (httpx.ConnectError, ConnectionError)):
-            return Classification(ErrorClass.LOCAL_DOWN, "local Firecrawl is not reachable")
+            return Classification(
+                ErrorClass.LOCAL_DOWN,
+                "local Firecrawl is not reachable; start it with docker compose up -d",
+            )
         if issubclass(exc_type, (httpx.TimeoutException, TimeoutError)):
             # A read/pool timeout with no target-side status: the site blocked us.
             return Classification(ErrorClass.BARRIER, "the scrape timed out, so a retry may help")
@@ -260,7 +271,11 @@ def classify(
     # be decided before the content check: a failed response carries no content,
     # and an empty body must not be read as "the page rendered empty".
     if origin is Origin.LOCAL and status in {401, 407}:
-        return Classification(ErrorClass.CONFIG, "local Firecrawl rejected our credentials")
+        return Classification(
+            ErrorClass.CONFIG,
+            "local Firecrawl rejected our credentials; check its base_url and any "
+            "auth or proxy setting in your config",
+        )
 
     # Rule 6b: an empty or furniture-only render. Placed after the auth check so
     # only a response that actually reached the page can read as a failed render.

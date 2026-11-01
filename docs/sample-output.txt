@@ -185,6 +185,7 @@ What each scenario is for:
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ 2  Dead link: page returns 404  SNIPPET                                                          │
 │ gone.example                                                                                     │
+│ page not found (HTTP 404)                                                                        │
 │ A story that has since been removed.                                                             │
 │ https://gone.example/old-story                                                                   │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
@@ -209,6 +210,7 @@ What each scenario is for:
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ 2  Dead link: page returns 404  SNIPPET                                      │
 │ gone.example                                                                 │
+│ page not found (HTTP 404)                                                    │
 │ A story that has since been removed.                                         │
 │ https://gone.example/old-story                                               │
 ╰──────────────────────────────────────────────────────────────────────────────╯

@@ -172,6 +172,9 @@ SCENARIOS = {
                 Method.SNIPPET,
                 ok=False,
                 error_class=ErrorClass.DEAD,
+                # The reason `classify` gives a 404, now that T6.1 carries it
+                # from the router to the card.
+                warning="page not found (HTTP 404)",
             ),
         ],
     ),

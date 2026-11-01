@@ -49,6 +49,9 @@ class ApiFirecrawlConfig(BaseModel):
     base_url: str = "https://api.firecrawl.dev"
     key_env: str = "FIRECRAWL_API_KEY"
     daily_limit: int = 20
+    #: Seconds before an API call is abandoned (T6.1). Same meaning as
+    #: `firecrawl.local.timeout_s`, which was already configurable.
+    timeout_s: float = 30.0
 
 
 class FirecrawlConfig(BaseModel):
@@ -83,8 +86,26 @@ class DedupConfig(BaseModel):
 class BriefingConfig(BaseModel):
     """Briefing mode's own settings (SPEC section 6)."""
 
+    model_config = ConfigDict(extra="forbid")
+
     #: Who the briefing addresses, read aloud once at the start.
     name: str = "Aether"
+
+
+class TimeoutsConfig(BaseModel):
+    """Timing bounds SPEC section 4 implies but names no numbers for (T6.1).
+
+    Both were constructor-only defaults, so a slow Firecrawl or a rate-limited
+    host could not be tuned without editing the source.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Bound on one URL's fetch, local plus any API retry. `0` opts out, which
+    #: is why this is not `float | None`: an absent bound must be asked for.
+    per_url_s: float = 30.0
+    #: Pause before the one local retry SPEC allows for a transient 5xx.
+    transient_backoff_s: float = 0.5
 
 
 class Paths(BaseModel):
@@ -113,6 +134,7 @@ class Config(BaseModel):
     blocklist_topics: list[str] = ["crypto", "bitcoin", "trading", "forex", "stocks"]
     dedup: DedupConfig = DedupConfig()
     briefing: BriefingConfig = BriefingConfig()
+    timeouts: TimeoutsConfig = TimeoutsConfig()
     paths: Paths
 
 

@@ -63,12 +63,14 @@ class ApiFirecrawl:
         base_url: str = "https://api.firecrawl.dev",
         api_key: str | None = None,
         daily_limit: int = 20,
+        timeout_s: float = 30.0,
         log_path: Path | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key or None
         self.daily_limit = daily_limit
+        self.timeout_s = timeout_s
         self.log_path = log_path
         self._client = client
         self._owns_client = client is None
@@ -121,7 +123,7 @@ class ApiFirecrawl:
 
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=30.0)
+            self._client = httpx.AsyncClient(timeout=self.timeout_s)
         return self._client
 
     def http_headers(self) -> dict[str, str]:

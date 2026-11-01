@@ -313,3 +313,28 @@ def test_daily_usage_of_a_malformed_log_is_zero(tmp_path: object) -> None:
     log = Path(str(tmp_path)) / "api_calls.jsonl"
     log.write_text('{"ts": "not a date"}\nnot json at all\n', encoding="utf-8")
     assert usage_today(log) == 0
+
+
+# --- configurable timeout (T6.1) --------------------------------------------
+
+
+def test_the_api_clients_timeout_is_configurable(tmp_path: object) -> None:
+    """The local client takes a timeout; the API client had one baked in.
+
+    T6.1 requires timeouts be configurable, so a slow API route must be tunable
+    the same way a slow local instance already is.
+    """
+    from pathlib import Path
+
+    api = ApiFirecrawl(
+        base_url=BASE, api_key=KEY, timeout_s=7.0, log_path=Path(str(tmp_path)) / "calls.jsonl"
+    )
+    assert api.timeout_s == 7.0
+
+
+def test_the_api_clients_timeout_defaults_to_30s(tmp_path: object) -> None:
+    """The documented default must stay the default."""
+    from pathlib import Path
+
+    api = ApiFirecrawl(base_url=BASE, api_key=KEY, log_path=Path(str(tmp_path)) / "calls.jsonl")
+    assert api.timeout_s == 30.0

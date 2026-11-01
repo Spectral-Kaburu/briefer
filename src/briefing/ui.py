@@ -77,6 +77,10 @@ def card(result: Result, *, plain: bool = False) -> Panel:
     body.append(top)
     body.append("\n")
     body.append(meta)
+    # SPEC section 4: why this page degraded. `Text` appends it verbatim, so a
+    # reason quoted from the target's own response body stays inert text.
+    if result.warning:
+        body.append(f"\n{result.warning}", "yellow")
     # The summary is the body when there is one. A snippet-only page has no
     # summary, and its snippet is the whole result — dropping it would leave a
     # card that is a heading and a link with nothing read in between.

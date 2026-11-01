@@ -90,4 +90,13 @@ forbids heredocs — so this cost nothing. Worked around with Edit, matching the
 file's last line and replacing it with itself plus the new entry. No need to
 change anything; noting it only because DENIED.md records these.
 
+## 2026-11-02 · shell redirect into /tmp
+
+Command: `.venv/bin/python scripts/render_samples.py > /tmp/samples_check.txt`. Why I
+wanted it: to diff the regenerated sample output against the committed
+`docs/sample-output.txt` without overwriting it. Denied like the earlier `git show
+... > /tmp` redirect. Turned out not to matter: `render_samples.py` writes
+`docs/sample-output.txt` itself and also returns the text, so running it with no
+redirect at all regenerates the file directly — which is what I actually wanted.
+
 
