@@ -7,6 +7,10 @@ to the same functions `briefing research` calls, so these are the exact bytes th
 UI writes. Regenerate with `scripts/render_samples.py` rather than editing by
 hand.
 
+Each scenario shows its live progress block (SPEC section 3's one spinner line
+per URL) and then a representative couple of cards; `found` in the footer counts
+the whole run, so the cards below it are a subset, not the complete set.
+
 What each scenario is for:
 
   1. All local, all good - the happy path, so the cards' normal state is on
@@ -25,6 +29,8 @@ What each scenario is for:
 ====================================================================================================
  briefing ▸ research
  Query: "kenya economy"   mode: text
+✔ LOCAL  nation.africa
+✔ LOCAL  businessdaily.africa
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ 1  Kenya's economy grew 5.2% last quarter  LOCAL                                                 │
 │ nation.africa · 2h ago                                                                           │
@@ -47,6 +53,8 @@ What each scenario is for:
 ================================================================================
  briefing ▸ research
  Query: "kenya economy"   mode: text
+✔ LOCAL  nation.africa
+✔ LOCAL  businessdaily.africa
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ 1  Kenya's economy grew 5.2% last quarter  LOCAL                             │
 │ nation.africa · 2h ago                                                       │
@@ -70,6 +78,8 @@ What each scenario is for:
 ====================================================================================================
  briefing ▸ research
  Query: "kenya economy"   mode: text
+✔ API  paywalled.example
+✔ LOCAL  nation.africa
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ 1  Paywalled: the full rate decision  API                                                        │
 │ paywalled.example · 1h ago                                                                       │
@@ -92,6 +102,8 @@ What each scenario is for:
 ================================================================================
  briefing ▸ research
  Query: "kenya economy"   mode: text
+✔ API  paywalled.example
+✔ LOCAL  nation.africa
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ 1  Paywalled: the full rate decision  API                                    │
 │ paywalled.example · 1h ago                                                   │
@@ -116,6 +128,8 @@ What each scenario is for:
 ====================================================================================================
  briefing ▸ research
  Query: "kenya economy"   mode: text
+✔ SNIPPET  nation.africa
+✔ SNIPPET  businessdaily.africa
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ 1  Inflation eases to 4.1 percent  SNIPPET                                                       │
 │ nation.africa                                                                                    │
@@ -137,6 +151,8 @@ What each scenario is for:
 ================================================================================
  briefing ▸ research
  Query: "kenya economy"   mode: text
+✔ SNIPPET  nation.africa
+✔ SNIPPET  businessdaily.africa
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ 1  Inflation eases to 4.1 percent  SNIPPET                                   │
 │ nation.africa                                                                │
@@ -158,6 +174,8 @@ What each scenario is for:
 ====================================================================================================
  briefing ▸ research
  Query: "kenya economy"   mode: text
+✔ LOCAL  nation.africa
+⚠ SNIPPET  gone.example
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ 1  Central bank statement in full  LOCAL                                                         │
 │ nation.africa · 2h ago                                                                           │
@@ -179,6 +197,8 @@ What each scenario is for:
 ================================================================================
  briefing ▸ research
  Query: "kenya economy"   mode: text
+✔ LOCAL  nation.africa
+⚠ SNIPPET  gone.example
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ 1  Central bank statement in full  LOCAL                                     │
 │ nation.africa · 2h ago                                                       │
@@ -201,6 +221,7 @@ What each scenario is for:
 ====================================================================================================
  briefing ▸ research
  Query: "kenya economy"   mode: text
+✔ API  very-long-domain-name-here.example.co.ke
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ 1  A long headline that wraps once at eighty columns and shows the continuation line  API        │
 │ very-long-domain-name-here.example.co.ke · 4h ago                                                │
@@ -219,6 +240,7 @@ What each scenario is for:
 ================================================================================
  briefing ▸ research
  Query: "kenya economy"   mode: text
+✔ API  very-long-domain-name-here.example.co.ke
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ 1  A long headline that wraps once at eighty columns and shows the           │
 │ continuation line  API                                                       │

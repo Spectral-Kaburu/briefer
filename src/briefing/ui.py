@@ -164,6 +164,12 @@ class UI:
         if self._live is not None:
             self._live.stop()
             self._live = None
+            # A non-terminal Live leaves the cursor where its last update ended,
+            # without the newline a normal print emits, so the first card's border
+            # welds onto the last progress line. A terminal clears the live area on
+            # stop and takes the cursor with it, so it needs no extra line.
+            if not self.console.is_terminal:
+                self.console.line()
         for result in report.results:
             self.console.print(card(result, plain=self.plain))
         self.console.print(footer(report, plain=self.plain))

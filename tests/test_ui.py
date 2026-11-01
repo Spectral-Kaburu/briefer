@@ -389,6 +389,23 @@ def test_the_live_block_keeps_its_lines_when_plain() -> None:
     assert "nation.africa" in out
 
 
+def test_a_logged_progress_line_ends_before_the_first_card_starts() -> None:
+    """A kept progress line must still be *terminated*.
+
+    `Live` leaves the cursor where its last update ended, without the newline a
+    normal print emits, so on a non-terminal console the first card's border
+    printed straight on top of the last progress line:
+    `✔ LOCAL  nation.africa╭────`. SPEC section 3 requires the piped run to be
+    readable, and this is the shape it takes when it is not.
+    """
+    ui = UI(Console(**_COLORED), plain=True)  # type: ignore[arg-type]
+    ui.begin("latest news", "news")
+    ui.on_event(Event(kind="finished", url="https://nation.africa/x", method=Method.LOCAL))
+    ui.show(_report(_result()))
+    out = ui.console.export_text()
+    assert "nation.africa\n╭" in out, "the progress line ran into the card border"
+
+
 def test_an_empty_url_in_an_event_does_not_crash_the_progress() -> None:
     """The pipeline emits a done event with no URL; the UI must ignore it."""
     ui = UI(Console(**_COLORED), plain=True)  # type: ignore[arg-type]

@@ -17,7 +17,7 @@ from pathlib import Path
 from rich.console import Console
 
 from briefing.fetch.router import ErrorClass, Method
-from briefing.pipeline import Report, Result
+from briefing.pipeline import Event, Report, Result
 from briefing.ui import UI
 
 OUT = Path(__file__).resolve().parent.parent / "docs" / "sample-output.txt"
@@ -31,6 +31,10 @@ widths that matter. No network, no pipeline: each scenario is a `Report` handed
 to the same functions `briefing research` calls, so these are the exact bytes the
 UI writes. Regenerate with `scripts/render_samples.py` rather than editing by
 hand.
+
+Each scenario shows its live progress block (SPEC section 3's one spinner line
+per URL) and then a representative couple of cards; `found` in the footer counts
+the whole run, so the cards below it are a subset, not the complete set.
 
 What each scenario is for:
 
@@ -193,6 +197,24 @@ SCENARIOS = {
 }
 
 
+def _finished(result: Result, total: int) -> Event:
+    """The progress line the pipeline emits for one finished URL.
+
+    Derived from the same `Result` the card renders rather than a second fixture,
+    so the live block cannot drift out of step with the cards below it.
+    """
+    return Event(
+        kind="finished",
+        query="kenya economy",
+        mode="text",
+        url=result.url,
+        method=result.method,
+        error_class=result.error_class,
+        done=result.rank,
+        total=total,
+    )
+
+
 def main() -> str:
     chunks = [HEADER]
     for label, report in SCENARIOS.items():
@@ -200,6 +222,8 @@ def main() -> str:
             console = Console(record=True, width=width)
             ui = UI(console=console, plain=True)
             ui.begin("kenya economy", "text")
+            for result in report.results:
+                ui.on_event(_finished(result, len(report.results)))
             ui.show(report)
             chunks.append("=" * width)
             chunks.append(f"{label}  [width {width}]")

@@ -57,6 +57,9 @@ Commands the sandbox denied, in `command — why it was needed` form.
   to be refused.
 
 ## 2026-11-01
+- `git show HEAD:src/briefing/ui.py > /tmp/ui_orig.py` — I wanted the pre-fix copy beside the
+  patched one to prove my glue-detection probe could actually detect the glue. Worked around by
+  temporarily reverting the fix with Edit, running the probe, then re-applying it.
 
 - `BRIEFING_STATE_DIR=/tmp/briefing-smoke .venv/bin/briefing whitelist add ...` — I wanted
   one manual smoke run of the new T3.4 subcommands against a throwaway state dir, to read
