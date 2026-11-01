@@ -152,3 +152,20 @@ silently picking up a file the user never named would be a new feature, not a
 fix. **Open question for T6.x**, not a defect: should `briefing config` report
 "no config file in use" so the owner knows defaults are in play? Logged rather
 than built, because nothing in SPEC asks for it.
+
+## D17 — 2026-11-01 · `Speaker` depends on `generate`, not on the `Gemini` class (T5.3)
+
+The synthesis needs one async method, and `Gemini` (the SDK wrapper) is the only
+implementation. **Decision**: `Speaker.__init__(gemini: t.Any)` — duck-typed on
+`async generate(prompt) -> str | None`. **Reason**: this is a bug fix. My first
+draft wrapped an injected SDK-shaped client, so the tests passed a fake with
+`generate` and every call silently fell through to the greeting on
+`AttributeError: 'Fake' object has no attribute 'aio'` — caught only because the
+`--dry-run`-free debug print surfaced what the broad `except` was swallowing.
+Typing the parameter as `Gemini` would have made that a *type-visible* lie, since
+tests pass fakes. The dependency direction is now documented on the class.
+
+Two follow-ons, both laziness rather than design: no sentence-count enforcement
+in code (SPEC §6's "under ~45s" is a prompt constraint; truncating on `.` would
+mangle "Dr." and "3.5" in a live briefing — a cap belongs to `max_output_tokens`
+and the model), and `prompts/briefing.txt` is read per call rather than imported.

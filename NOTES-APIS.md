@@ -239,6 +239,22 @@ and result text on `result.stdout`. Never write an error-path assertion against
 `monkeypatch.setenv("FORCE_COLOR", "1")` and must not assert the emoji and its
 label as one string.
 
-## 6. Gemini via `google-genai` (for T4.1)
+## 6. Gemini via `google-genai` (for T5.3 / T4.1)
 
-Not yet verified.
+Verified against `google-genai` 2.34.0, installed 2026-11-01 (the package, not the
+network — the SDK was inspected locally; no key was present, so nothing called the
+API). Source: the installed package's `google/genai` module.
+
+| Fact | Verified value |
+|---|---|
+| Install | `pip install google-genai` (2.34.0) |
+| Client | `google.genai.Client(api_key=...)` — the key is the **only** constructor arg this project needs |
+| Sync call | `client.models.generate_content(model: str, contents: str, config: GenerateContentConfig \| None)` |
+| Async call | `client.aio.models.generate_content(...)` — same signature, returns a coroutine |
+| Config | `google.genai.types.GenerateContentConfig(max_output_tokens=..., temperature=...)` — `max_output_tokens` is an int cap, **not** a spoken-seconds cap |
+| Response text | `response.text` concatenates the first candidate's parts; `None` when there is no candidate (e.g. `block_reason` set) |
+| Blocked | a blocked prompt returns a response with `prompt_feedback.block_reason` set and `.text is None` — it does **not** raise |
+
+**Not verified** (needs a key, i.e. an owner-side live check): model names, whether
+`gemini-2.5-flash` still resolves, quota behaviour, actual token-to-seconds ratio.
+Keep the model name in config so the owner can change it without a code edit.

@@ -828,5 +828,26 @@ captured output showed the actual weld). The samples now render `ui.on_event`
 per result before the cards, so the deliverable shows the whole run, not just
 its end state.
 
+**T5.3 — briefing synthesis (`synth.py`, `prompts/briefing.txt`).** The Gemini
+surface is verified against the installed `google-genai` 2.34.0 in NOTES-APIS.md
+section 6 (`client.aio.models.generate_content`, `GenerateContentConfig`, and the
+fact that a *blocked* prompt returns `response.text is None` rather than raising).
+Install added as the optional `llm` extra; the SDK import is lazy so a run without
+it still greets.
+
+**Design**: `Speaker` depends on the `generate` method, not on the `Gemini`
+class, so tests inject any `async generate(prompt)` and never construct a key.
+This was a bug fix, not a guess: my first draft had `Gemini` wrap an injected
+SDK-shaped client, and every synthesis test silently hit the fallback because the
+fake had no `.aio` — found by surfacing the exception the broad `except` was
+hiding, then pinning the dependency direction with a docstring.
+
+**Fallback (SPEC section 6)**: empty headlines, a raising client, `text is None`
+(blocked), and whitespace-only text all degrade to one greeting, and the last
+four cases share one code path. A missing `prompts/briefing.txt` raises and is
+caught by the same handler — no prompt means no synthesis, never a model call
+with an empty prompt. `DEFAULT_PROMPT` as an in-code copy of the prompt was
+deleted: I diffed them and they had already drifted by a newline.
+
 
 

@@ -18,6 +18,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# LLM synthesis is optional (SPEC section 2, default extractive). `synth.py`
+# imports it lazily, so `briefing -r` and `briefing run`'s fallback both work
+# with it absent.
+llm = [
+    "google-genai",
+]
 dev = [
     "pytest",
     "pytest-asyncio",

@@ -57,6 +57,12 @@ Commands the sandbox denied, in `command — why it was needed` form.
   to be refused.
 
 ## 2026-11-01
+- `PYTHONPATH=src:tests .venv/bin/python /tmp/probe_synth.py` — I wanted to probe `Speaker.prompt()`
+  interactively. Worked around by reading the traceback pytest already prints and adding a temporary
+  assertion inside the test instead.
+- `sed -i 's/^async def test_/@pytest.mark.asyncio\nasync def test_/' tests/test_synth.py` — bulk edit to add
+  the asyncio marker to 13 tests. Done instead with 13 Edit calls, which is slower but within the
+  dedicated-tool preference; noting it so I reach for a shared marker if this comes up again.
 - `git show HEAD:src/briefing/ui.py > /tmp/ui_orig.py` — I wanted the pre-fix copy beside the
   patched one to prove my glue-detection probe could actually detect the glue. Worked around by
   temporarily reverting the fix with Edit, running the probe, then re-applying it.
