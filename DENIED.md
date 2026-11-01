@@ -82,4 +82,12 @@ The local-first fetch router (SPEC section 4) and the `@pytest.mark.live` smoke
 tests (T2.3) both need it. Please run `docker compose up -d` in the Firecrawl
 project when you get a chance.
 
+## 2026-11-02 · heredoc append to DECISIONS.md
+
+Command: `cat >> DECISIONS.md << 'EOF'`. Why I wanted it: the obvious way to
+append a decision entry without rewriting the file. Denied, and CLAUDE.md already
+forbids heredocs — so this cost nothing. Worked around with Edit, matching the
+file's last line and replacing it with itself plus the new entry. No need to
+change anything; noting it only because DENIED.md records these.
+
 

@@ -849,5 +849,22 @@ caught by the same handler — no prompt means no synthesis, never a model call
 with an empty prompt. `DEFAULT_PROMPT` as an in-code copy of the prompt was
 deleted: I diffed them and they had already drifted by a newline.
 
+**T5.4 (2026-11-01)**: `deliver.py` speaks `voice-tts -s aether -p high "<text>"`
+through an injectable runner and `--dry-run` prints the shlex-quoted argv; a
+nonzero status, a missing binary and an OS error each become a `DeliveryError`
+with a fix hint. `briefing run` wires the whole briefing in order: 24h schedule
+gate, audio gate, blocklist, per-topic headlines minus the seen ones, the session
+summary, synthesis, delivery — and records the headlines plus the fired schedule
+only after a successful delivery.
+
+**Incident, recorded honestly**: while sabotage-testing the gate I found that
+`test_a_refused_briefing_says_why` left `_RUNNER`/`_SEARCH` unpatched, and my
+sabotage removed the gate, so the real `voice-tts` ran once with the fallback
+greeting "Good morning, Aether." and a real ddgs search fired. Both refusal tests
+now patch `_SEARCH`/`_RUNNER` and assert the fake runner was never called, so a
+gate regression fails the test instead of broadcasting audio — verified by
+re-running the sabotage with the hardened tests. Suite: 491 passed, 4 skipped,
+ruff clean; verifier VERIFIED.
+
 
 

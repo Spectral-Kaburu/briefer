@@ -169,3 +169,24 @@ Two follow-ons, both laziness rather than design: no sentence-count enforcement
 in code (SPEC §6's "under ~45s" is a prompt constraint; truncating on `.` would
 mangle "Dr." and "3.5" in a live briefing — a cap belongs to `max_output_tokens`
 and the model), and `prompts/briefing.txt` is read per call rather than imported.
+
+## D18 — 2026-11-01 · `briefing run`'s collaborators are configured, not constructed (T5.4)
+
+`_briefing` needs a searcher, a store, an audio-state reader and a speaker, each
+built from `Config`. **Decision**: each is a small factory over the loaded config
+(`_search`, `_dedup`, `_audio`, `_speaker`), published as the seams `_SEARCH`,
+`_DEDUP`, `_AUDIO`, `_SPEAKER` beside the existing `_PIPELINE`/`_RUNNER`.
+**Reason**: the alternative — constructing `DedupStore`, `Gemini`, `Searcher` and
+`FileAudioState` inline — leaves a test able to swap only the runner, so the
+refusal tests depend on the gate to keep the *other* real collaborators
+unreachable. That is exactly the trap that produced the incident in PROGRESS.md:
+a gate regression fell through to a real `voice-tts` and a real search. A factory
+per collaborator means every test names the whole graph, and a regression fails a
+test named for it. `Speaker` is still built from `Gemini()` inside the factory,
+so tests that want the real thing can ask for it and tests that do not, cannot.
+
+One consequence worth knowing: `if not dry_run:` in `_briefing` guards only the
+dry-run case. A *failed* delivery never reaches that line — `deliver` raises and
+`_fail` exits first. The two behaviours (dry run records nothing, failed delivery
+records nothing) are correct and tested, but they are enforced by different code,
+which is why the dry-run test asserts on the store file directly.

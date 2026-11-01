@@ -18,6 +18,7 @@ import pytest
 from briefing.briefing import (
     DedupStore,
     FileAudioState,
+    FileSessionSummary,
     Gate,
     SeenHeadline,
     TopicFilter,
@@ -334,6 +335,50 @@ async def test_file_audio_state_treats_an_unknown_state_as_not_speaking(tmp_path
     path = tmp_path / "audio.json"
     path.write_text(json.dumps({"state": "garbled"}))
     assert not await FileAudioState(path).speaking()
+
+
+# --- session summary (T5.4) -------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_file_session_summary_reads_the_summary_from_the_file(tmp_path: Path) -> None:
+    """SPEC section 6: the briefing continues yesterday's session."""
+    path = tmp_path / "session.json"
+    path.write_text(json.dumps({"summary": "We deployed the briefing service."}))
+    assert await FileSessionSummary(path).text() == "We deployed the briefing service."
+
+
+@pytest.mark.asyncio
+async def test_file_session_summary_is_empty_when_aether_wrote_none(tmp_path: Path) -> None:
+    """A missing summary is "no continuity", not a failure.
+
+    A first-ever run has nothing to continue, and the briefing must still speak.
+    """
+    path = tmp_path / "absent.json"
+    assert await FileSessionSummary(path).text() == ""
+
+
+@pytest.mark.asyncio
+async def test_file_session_summary_survives_a_corrupt_file(tmp_path: Path) -> None:
+    """A truncated write must not stop the briefing from running."""
+    path = tmp_path / "session.json"
+    path.write_text("{not json")
+    assert await FileSessionSummary(path).text() == ""
+
+
+@pytest.mark.asyncio
+async def test_file_session_summary_ignores_a_non_object_file(tmp_path: Path) -> None:
+    path = tmp_path / "session.json"
+    path.write_text(json.dumps(["a summary in a list"]))
+    assert await FileSessionSummary(path).text() == ""
+
+
+@pytest.mark.asyncio
+async def test_file_session_summary_trims_whitespace(tmp_path: Path) -> None:
+    """A trailing newline in the prompt reads as a spoken pause."""
+    path = tmp_path / "session.json"
+    path.write_text(json.dumps({"summary": "  a summary \n"}))
+    assert await FileSessionSummary(path).text() == "a summary"
 
 
 @pytest.mark.asyncio

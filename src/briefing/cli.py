@@ -1,9 +1,9 @@
 """The `briefing` command-line interface (SPEC sections 3 and 7).
 
-`research`, `whitelist`, `status` and `config` exist; `run` arrives with T5.4.
-Everything below the argument parsing is the dependency wiring, which lives in
-one place so a test can swap the pipeline (or the collaborators) by name rather
-than reaching into a running event loop.
+`research`, `run`, `whitelist`, `status` and `config` exist; `run` is the
+scheduled morning briefing (T5.4). Everything below the argument parsing is
+the dependency wiring, which lives in one place so a test can swap the pipeline
+(or any collaborator) by name rather than reaching into a running event loop.
 
 Help text uses plain Click (`rich_markup_mode=None`) rather than Rich's panel
 help: Rich wraps against a detected console width, which makes help snapshots
@@ -16,24 +16,74 @@ import asyncio
 import json
 import os
 import typing as t
+from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
 from rich.console import Console
 
+from briefing.briefing import DedupStore, FileAudioState, FileSessionSummary, Gate, TopicFilter
 from briefing.config import Config, ConfigError, load_config, resolve_api_key
+from briefing.deliver import DeliveryError, SubprocessRunner, deliver
 from briefing.extract import Extracted, extract
 from briefing.fetch.api import ApiFirecrawl, usage_today
 from briefing.fetch.local import LocalFirecrawl
 from briefing.fetch.router import Router
 from briefing.pipeline import Pipeline, Report
 from briefing.search import Searcher
+from briefing.synth import Gemini, Speaker
 from briefing.ui import UI
 from briefing.whitelist import Whitelist, WhitelistEntry, normalize_host
 
-# The seam the CLI tests use: patching this one name swaps the whole run's
-# collaborator graph. Real code uses the real `Pipeline`.
+
+class HeadlineSearch:
+    """One news topic in, headlines out (SPEC section 6).
+
+    The seam between `briefing run` and the search stack: brief mode never runs
+    the research pipeline, it asks per topic and keeps only the titles.
+    `Searcher.search` never raises — it answers [] on failure — so neither does
+    this, and a topic that fails simply contributes nothing to the briefing.
+    """
+
+    def __init__(self, searcher: Searcher) -> None:
+        self.searcher = searcher
+
+    async def headlines(self, topic: str) -> list[str]:
+        return [hit.title for hit in await self.searcher.search(topic)]
+
+
+def _search(loaded: Config) -> HeadlineSearch:
+    """Brief mode is a news briefing, so its searcher is forced to news."""
+    return HeadlineSearch(_searcher(loaded, "news"))
+
+
+def _dedup(loaded: Config) -> DedupStore:
+    """Headline hashes and the 24h schedule gate, both driven by config."""
+    return DedupStore(
+        loaded.paths.seen_headlines,
+        ttl_days=loaded.dedup.headline_ttl_days,
+        window_hours=loaded.dedup.schedule_window_hours,
+    )
+
+
+def _audio(loaded: Config) -> FileAudioState:
+    """Aether's recorded audio state, the gate's second condition."""
+    return FileAudioState(loaded.paths.audio_state)
+
+
+def _speaker(loaded: Config, session_summary: str = "") -> Speaker:
+    """The real speaker: Gemini for the text, name and session around it."""
+    return Speaker(Gemini(), name=loaded.briefing.name, session_summary=session_summary)
+
+
+# The seams the tests patch by name, so a whole run's collaborator graph swaps
+# without touching a running event loop. Real code uses the real things.
 _PIPELINE = Pipeline
+_RUNNER = SubprocessRunner
+_SEARCH = _search
+_SPEAKER = _speaker
+_AUDIO = _audio
+_DEDUP = _dedup
 
 
 def _STATE_DIR() -> Path:
@@ -347,6 +397,65 @@ def _research(
         ui.show(report)
     else:
         typer.echo(json.dumps(_as_json(report), indent=2))
+
+
+@app.command()
+def run(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print the command, speak nothing."),
+    config: str = typer.Option(None, "--config", help="Path to a YAML config file."),
+) -> None:
+    """Run the morning briefing now: the scheduler's entry point (SPEC section 6).
+
+    In order: the 24h gate, then the audio gate, then headlines per unblocked
+    topic minus the ones already seen, then synthesis, then delivery. A refused
+    run says why; a run with no headlines still speaks the greeting, because
+    silence is the one outcome a morning briefing must not produce.
+    """
+    loaded = _load(config)
+    asyncio.run(_briefing(loaded, dry_run=dry_run))
+
+
+async def _briefing(loaded: Config, *, dry_run: bool) -> None:
+    """The briefing itself, with every collaborator taken from its seam.
+
+    Async because search, the gates, synthesis and delivery all are. A test
+    patches the seams instead of calling this directly, which is what keeps the
+    whole graph — including `voice-tts` — off a real run.
+    """
+    store = _DEDUP(loaded)
+    gate = Gate(store, _AUDIO(loaded))
+
+    now = datetime.now(UTC)
+    schedule = store.schedule_id(now)
+    refusal = await gate.refusal(now=now, schedule=schedule)
+    if refusal is not None:
+        typer.echo(f"Briefing not spoken: {refusal}.")
+        return
+
+    keep = TopicFilter(loaded.blocklist_topics).keep(loaded.news_topics)
+    search = _SEARCH(loaded)
+    fresh: list[str] = []
+    for topic in keep:
+        for headline in await search.headlines(topic):
+            if headline.strip() and not store.seen(headline):
+                fresh.append(headline)
+
+    summary = await FileSessionSummary(loaded.paths.session_summary).text()
+    speaker = _SPEAKER(loaded, summary)
+    try:
+        delivery = await deliver(
+            (await speaker.briefing(fresh)).text, runner=_RUNNER(), dry_run=dry_run
+        )
+    except DeliveryError as exc:
+        _fail(exc.message, exc.hint)
+
+    if not dry_run:
+        # Nothing is remembered for a dry run, and a failed delivery has
+        # already exited above, so what gets recorded here was really spoken.
+        for headline in fresh:
+            store.record(headline)
+        store.mark_fired(schedule, now=now)
+    typer.echo(f"{'Would speak (dry run)' if dry_run else 'Spoke'}: {delivery.text}")
 
 
 def _mode_for(news: bool, web: bool) -> str | None:

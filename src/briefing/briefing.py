@@ -227,6 +227,29 @@ class FileAudioState:
         return str(data.get("state", "")).strip().lower() == "speaking"
 
 
+class FileSessionSummary:
+    """Reads yesterday's session summary from the file Aether writes.
+
+    The same IPC shape as `FileAudioState`, so both live under the state dir and
+    a test moves them together. SPEC section 6 asks for continuity with the
+    session; a missing file means Aether wrote none, which is why this returns
+    "" rather than raising — see `Gate.refusal` for why missing state is safe.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    async def text(self) -> str:
+        """The summary, or "" when there is none."""
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return ""
+        if not isinstance(data, dict):
+            return ""
+        return str(data.get("summary", "")).strip()
+
+
 class Gate:
     """Decides whether a briefing may fire: 24h schedule + audio state.
 

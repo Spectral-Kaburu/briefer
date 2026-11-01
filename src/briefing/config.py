@@ -80,11 +80,26 @@ class DedupConfig(BaseModel):
     schedule_window_hours: int = 24
 
 
+class BriefingConfig(BaseModel):
+    """Briefing mode's own settings (SPEC section 6)."""
+
+    #: Who the briefing addresses, read aloud once at the start.
+    name: str = "Aether"
+
+
 class Paths(BaseModel):
+    """Every file the CLI owns, all under the state dir so a test moves them all
+    at once by overriding it."""
+
     state_dir: Path
     whitelist: Path
     seen_headlines: Path
     log_file: Path
+    #: Aether drops yesterday's summary here (T5.4). Missing means "no
+    #: continuity", not an error.
+    session_summary: Path
+    #: Aether records its audio state here (T5.2's gate).
+    audio_state: Path
 
 
 class Config(BaseModel):
@@ -97,6 +112,7 @@ class Config(BaseModel):
     summary: SummaryConfig = SummaryConfig()
     blocklist_topics: list[str] = ["crypto", "bitcoin", "trading", "forex", "stocks"]
     dedup: DedupConfig = DedupConfig()
+    briefing: BriefingConfig = BriefingConfig()
     paths: Paths
 
 
@@ -114,6 +130,8 @@ def _build_paths(state_dir: Path) -> Paths:
         whitelist=state_dir / "whitelist.yaml",
         seen_headlines=state_dir / "seen_headlines.json",
         log_file=state_dir / "briefing.log",
+        session_summary=state_dir / "session-summary.json",
+        audio_state=state_dir / "audio-state.json",
     )
 
 
