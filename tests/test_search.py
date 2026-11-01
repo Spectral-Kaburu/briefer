@@ -254,6 +254,34 @@ def test_news_query_uses_news_endpoint(fake: FakeDDGS) -> None:
     assert fake.text_calls == []
 
 
+def test_forced_news_mode_beats_a_plain_query() -> None:
+    """SPEC section 3's --news: the flag decides, not the query's words."""
+    fake = FakeDDGS(news=[NEWS_HIT])
+    searcher = _searcher(ddgs_factory=lambda: fake, mode="news")
+    results = asyncio.run(searcher.search("how does a lending rate work"))
+    assert [r.origin for r in results] == ["news"]
+    assert len(fake.news_calls) == 1
+    assert fake.text_calls == []
+
+
+def test_forced_web_mode_beats_a_news_query() -> None:
+    """SPEC section 3's --web: ditto, in the other direction."""
+    fake = FakeDDGS(text=[TEXT_HIT])
+    searcher = _searcher(ddgs_factory=lambda: fake, mode="text")
+    results = asyncio.run(searcher.search("latest breaking flooding"))
+    assert [r.origin for r in results] == ["text"]
+    assert len(fake.text_calls) == 1
+    assert fake.news_calls == []
+
+
+def test_no_forced_mode_auto_detects_from_the_query(fake: FakeDDGS) -> None:
+    """The default stays SPEC section 2's auto-detect."""
+    searcher = _searcher(ddgs_factory=lambda: fake)
+    assert searcher.mode_for("latest flooding") == "news"
+    assert searcher.mode_for("how a lending rate works") == "text"
+    assert searcher.mode_for("latest flooding") == "news"
+
+
 def test_plain_query_uses_text_endpoint() -> None:
     fake = FakeDDGS(text=[TEXT_HIT])
     searcher = _searcher(ddgs_factory=lambda: fake)

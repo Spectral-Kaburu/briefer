@@ -66,6 +66,55 @@ on the table and matches what a 503 would have produced; any other class risks
 spending an API call on a URL that never answered locally. `warning` carries the
 real text ("Timed out after Ns."), so nothing is lost.
 
+## D10 — 2026-11-01 · `-r` lives on the group callback via `invoke_without_command` (T3.3)
+
+SPEC §3's shorthand is `briefing -r "<query>"`. The obvious implementation — a
+bare positional argument on a single-command app — stops working the moment a
+second command (`run`, `whitelist`, `status`, `config`, all T3.4) is registered,
+because Click then reads a bare positional as a *subcommand name*. Typer's
+own collapse of a one-command app into a bare command had already hidden this
+in T0.1's skeleton. **Decision**: put `-r/--research` on the group callback and
+set `invoke_without_command=True` on both the app and the callback.
+**Reason**: it keeps working at any command count and costs one flag. Cost: help
+shows `-r` as an option on `briefing` rather than as an argument, which is how
+Click spells group options and matches SPEC's own usage line.
+
+## D11 — 2026-11-01 · `rich_markup_mode=None`, so help is plain Click (T3.3)
+
+Typer defaults to rich markup help panels. **Decision**: disable them.
+**Reason**: Rich wraps help text against a *detected console width*, so the
+help output changes between a terminal and a captured stream — which makes the
+help-based tests assert on a moving target. Click's own help is fixed-width
+stable, and SPEC §3 asks only that help "read clearly" and include examples.
+Worth revisiting only if the owner wants panel help.
+
+## D12 — 2026-11-01 · `--news`/`--web` fail together instead of one silently winning (T3.3)
+
+Click treats a paired `--news/--web` flag as one parameter, so passing both
+just sets the value twice and exits 0 — the user gets whichever came last with
+no warning. **Decision**: two separate booleans plus an explicit check that
+fails with a message when both are set. **Reason**: SPEC §3 spells them as
+alternatives, and a silently-ignored flag is a bug the user cannot see. The
+message names both flags and which to drop.
+
+## D13 — 2026-11-01 · The `--time` window sets `Searcher.timelimit` directly (T3.3)
+
+`SearchConfig` (pydantic, `extra="forbid"`) has no `timelimit` field — SPEC §7's
+config sketch omits it, and `Searcher` already carries the "past day, widening
+to week" rule as its own default. **Decision**: mutate the constructed
+`Searcher.timelimit` rather than adding a config key. **Reason**: the shortest
+diff that works with the schema as specified, and it keeps one source of truth
+for the default. Cost: config-driven timelimit would need a schema change first.
+
+## D14 — 2026-11-01 · `--llm`/`--synth` parse now, act at T4.1 (T3.3)
+
+SPEC §2 makes both opt-in and T4.1 (optional) implements them. **Decision**:
+declare the flags in T3.3 so the surface is complete and `--llm` no longer
+errors as unknown, but leave them inert until T4.1 lands. **Reason**: an unknown
+flag is a hard error, so declaring them early is strictly better than omitting
+them; wiring half a Gemini client would be worse than none. The help text says
+"(T4.1)" so the inertness is visible rather than a surprise.
+
 ## D9 — 2026-10-31 · Duplicate search hits fetch once (T3.1)
 
 Search can return the same URL twice (two queries, one topic list; or a promotion

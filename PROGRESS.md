@@ -619,5 +619,73 @@ SPEC's example writes `1 API` (`Method.value` is lowercase). SPEC's own example 
 internally inconsistent there, and **T3.5 is the task that renders five real
 scenarios and judges exactly this kind of polish**. Noted for it.
 
+---
+
+## Session 3 — 2026-11-01
+
+### T3.3 ✔ — `cli.py` Typer surface, `-r` shorthand, `--json`, fix-hint errors
+
+**What**: `src/briefing/cli.py` (281 lines) + `tests/test_cli.py` (29 tests).
+`make check` green: ruff clean, **418 passed, 4 skipped** (the 4 skips are the
+`@pytest.mark.live` T2.3 tests still waiting on the owner).
+
+**Decisions**: D10–D14 in DECISIONS.md. The two that cost real thought:
+- `-r` on the group callback + `invoke_without_command=True`, because a bare
+  positional breaks the moment T3.4 registers a second command.
+- `--news`/`--web` are two separate booleans that *fail* when both are passed.
+  The paired `--news/--web` flag silently takes whichever came last; I probed
+  that in a throwaway script (`news=True web=True`, exit 0) before deciding.
+
+**Facts verified against the installed stack, not assumed** (probe script, then
+deleted):
+- click 8.5 `CliRunner` **separates stdout and stderr**. Click usage errors and
+  my `_fail()` output both land on stderr. My first draft asserted them in
+  `result.stdout`, which made the tests fail against correct code — **the tests
+  were wrong, not the CLI**. Fixed by asserting `result.stderr`.
+- Rich only honors a terminal it *believes* is one. A captured console is not a
+  terminal, so `UI` auto-plains (SPEC §3's "auto `--plain` when piped") and the
+  emoji badges drop. That means a CliRunner run can never assert `🟢 LOCAL` as a
+  contiguous string — Rich also splits the styled badge into separate spans, so
+  an ANSI code sits between emoji and label. `test_a_colored_run_keeps_the_emoji_badge`
+  sets `FORCE_COLOR=1` and asserts on the emoji alone.
+- `SearchConfig` (pydantic, `extra="forbid"`) has **no `timelimit` field** — SPEC
+  §7's config sketch omits it. My first draft wrote `loaded.search.timelimit`
+  and got `AttributeError`; now `--time` sets `Searcher.timelimit` directly.
+- `Result` is a **dataclass**, not a NamedTuple — `._replace()` does not exist.
+
+**Rigour checks** (per the TDD Iron Law — new non-trivial logic must have a test
+that provably bites). I added tests for `Extractor`, `_timelimit` and the new
+`mode` wiring, then sabotaged each and confirmed the failure before restoring:
+- dropping `sentences=` from `Extractor.extract` fails
+  `test_the_extractor_honors_the_configured_sentence_count` (2 != 1);
+- adding a bogus `"fortnight"` key to `_timelimit` fails
+  `test_an_unknown_time_value_is_a_clean_error` (exit 0 != 0);
+- removing `mode=mode` from the `Searcher` wiring fails 3 CLI tests;
+- reverting `Searcher.search` to `detect_mode(query)` fails 2 search tests.
+
+**One test of my own was wrong and the code was right.** I wrote a `sentences=1`
+assertion against three short sentences, and it failed at 3 == 1. I reached for
+`extract.py` to "fix" it, then traced
+`_prose_lines → _split_sentences → _merge_fragments → _skip_kickers` in
+isolation: with every sentence under `_MIN_SUBSTANCE_CHARS` (40), `_skip_kickers`
+returns the page untrimmed *by design* ("a genuinely all-short page should not be
+reduced to nothing"). Fixed the fixture, not the code.
+
+**A real bug the `verifier` subagent caught**, which is the point of running it:
+`--news`/`--web` only changed the *header word*; `_searcher()` never received
+them, and `Pipeline.run` re-derived the mode per query, so
+`briefing research "kenya economy" --news` displayed `mode: news` while actually
+running a **text** search. My own test could not see it because it used a query
+whose own words auto-detect as news and asserted only that `region` was truthy.
+Fixed properly: `Searcher` now takes a `mode` override with `mode_for(query)`
+falling back to auto-detect, `cli.py` passes the forced mode in, and the header
+now prints `searcher.mode_for(query)` so display and reality cannot drift apart.
+Both halves have tests that I verified fail when the wiring is removed.
+
+**Known gap, deliberate**: `--llm` and `--synth` parse and are documented, but
+do nothing until T4.1 (optional) lands. An unknown flag is a hard error, so
+declaring them now beats omitting them; the help says "(T4.1)". Also `--config`
+accepts a path but there is no config subcommand yet — that is T3.4.
+
 
 

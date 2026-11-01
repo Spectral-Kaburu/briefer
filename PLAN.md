@@ -37,7 +37,7 @@ Skills: `superpowers:test-driven-development`; for `ui.py` also fetch Rich/Typer
 
 - [x] **T3.1** `pipeline.py`: search → fetch (semaphore-limited concurrency) → extract; emits progress events consumed by the UI; per-URL timeouts; one bad URL never kills the run. *Accept*: mocked end-to-end test with mixed outcomes (local ok, barrier→API, dead, local down). **[review]**
 - [x] **T3.2** `ui.py`: Rich live progress (one spinner line per URL), method badges, result cards, footer panel, `--plain` and `NO_COLOR` handling. *Accept*: snapshot tests via `Console(record=True, width=100)` for each badge state and the footer.
-- [ ] **T3.3** `cli.py`: `briefing -r "<query>"` shorthand, `research` command and all flags from SPEC section 3, `--json`, friendly errors with fix hints. *Accept*: Typer `CliRunner` tests; `briefing --help` and `briefing research --help` read clearly (include examples in help text).
+- [x] **T3.3** `cli.py`: `briefing -r "<query>"` shorthand, `research` command and all flags from SPEC section 3, `--json`, friendly errors with fix hints. *Accept*: Typer `CliRunner` tests; `briefing --help` and `briefing research --help` read clearly (include examples in help text).
 - [ ] **T3.4** `whitelist` subcommands, `status` (local health, API key present?, daily usage, ddgs reachable), `config`. *Accept*: CliRunner tests.
 - [ ] **T3.5** Output polish pass: render sample runs to text (`Console(record=True).export_text()`) for 5 scenarios; read them critically for clarity and alignment, fix issues. Save samples to `docs/sample-output.txt`. **[review]**
 

@@ -214,9 +214,30 @@ be re-parsed as markup:
 `Table(*headers, box=, show_header=, pad_edge=, expand=False, padding=)`.
 `box=None` removes borders. `Panel.expand` defaults True, `Table.expand` False.
 
-### Typer (for T3.3)
+### Typer + Click (for T3.3)
 
-Not yet read. To verify against `typer.tiangolo.com` when implementing `cli.py`.
+Verified 2026-11-01 against the **installed sources** (`typer 0.27.3`,
+`click 8.5.0`, `.venv/lib/python3.14/site-packages/`) with a throwaway probe app,
+because several of these are exactly backwards from what the docs suggest and
+each one cost a wrong test in T3.3.
+
+| Item | Verified fact |
+|---|---|
+| `CliRunner` streams | click 8.5's `Result` **separates `.stdout`, `.stderr` and `.output`**. Click usage errors (`No such option`, `Missing argument`) land on **`.stderr`** with exit code 2. There is no `mix_stderr` parameter any more |
+| `typer.Exit(code=n)` | raises `SystemExit(n)`, *not* a message — so it is the clean no-traceback exit. `CliRunner` records it as `.exception` of type `SystemExit`, with `result.exit_code` set |
+| `rich_markup_mode=None` | disables Rich's panel help; Click's own help renders instead, at **fixed width**. The default (`"rich"`) wraps against a detected console width, so help snapshots shift between a terminal and a captured stream |
+| `invoke_without_command=True` | on the *app* lets the callback run with no subcommand; it must also be set on the callback to combine with `no_args_is_help=True`. This is how a group-level `-r QUERY` option works |
+| Group option vs bare positional | with ≥2 commands registered, a bare positional on the group is read as a **subcommand name**, not a query. A one-command Typer app collapses to a bare command, which is why the T0.1 skeleton appeared to accept one |
+| Paired flag `--news/--web` | one parameter: passing **both** sets it twice and exits **0** — the last one silently wins, with no error. Mutual exclusion needs two separate booleans plus an explicit check |
+| `bool | None` flag | supported as a tri-state option (`typer.Option(None, "--plain/--no-plain")`) |
+| `FORCE_COLOR=1` | Rich treats the console as a terminal. The only way a `CliRunner` run can exercise the colored path |
+| Styled badge rendering | `Text.assemble(("🟢 ", style), ("LOCAL", style))` renders as **two spans**, so an ANSI code sits between the emoji and the label — `"🟢 LOCAL"` is never a contiguous substring of a colored render. Assert on the stripped export, or on the emoji alone |
+
+**Consequence for this project:** CLI tests assert error text on `result.stderr`
+and result text on `result.stdout`. Never write an error-path assertion against
+`.stdout` — it will fail against correct code. A colored-path test needs
+`monkeypatch.setenv("FORCE_COLOR", "1")` and must not assert the emoji and its
+label as one string.
 
 ## 6. Gemini via `google-genai` (for T4.1)
 

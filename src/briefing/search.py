@@ -170,6 +170,7 @@ class Searcher:
         backoff_s: float = 0.0,
         max_retries: int = _MAX_RETRIES,
         backup: t.Any | None = None,
+        mode: str | None = None,
     ) -> None:
         self._factory = ddgs_factory or DDGS
         self.region = region
@@ -178,6 +179,13 @@ class Searcher:
         self.backoff_s = backoff_s
         self.max_retries = max_retries
         self.backup = backup
+        # SPEC section 2 auto-detects the mode from the query; `--news`/`--web`
+        # override it once, for the whole run.
+        self.mode = mode
+
+    def mode_for(self, query: str) -> str:
+        """Which endpoint this run uses: the forced mode, else auto-detect."""
+        return self.mode or detect_mode(query)
 
     async def search(self, query: str) -> list[SearchResult]:
         """Search for `query`, retrying a rate-limited call once wider.
@@ -185,7 +193,7 @@ class Searcher:
         Never raises for a failed search: an empty list is a valid answer and the
         caller already has the search snippet as a fallback.
         """
-        if detect_mode(query) == "news":
+        if self.mode_for(query) == "news":
             results = await self._run(
                 lambda ddgs, limit: ddgs.news(query, **self._kwargs(limit)), "news"
             )
