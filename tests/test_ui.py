@@ -75,8 +75,48 @@ def _report(*results: Result, **kwargs: t.Any) -> Report:
 # --- badges ----------------------------------------------------------------
 
 
-def test_each_method_has_its_spec_badge() -> None:
-    """SPEC section 3: 🟢 LOCAL · 🟡 API · ⚪ SNIPPET · 🔴 FAILED."""
+def test_a_failed_fetch_degrades_to_the_snippet_not_to_failed() -> None:
+    """T3.5: what a hard failure actually shows, driven through the real pipeline.
+
+    SPEC section 3 defines ⚪ SNIPPET as "extraction failed, DDG snippet only",
+    and every row of its classification table resolves to snippet-only, API, or a
+    config error — none of them to "nothing to show at all". A DDG hit always
+    carries a snippet, so there is always something to render. Hence a dead page
+    shows ⚪ with its snippet, and 🔴 FAILED is unreachable in practice.
+
+    Pinned here because it is the opposite of what the badge's own unit test
+    implies (`badge(Method.LOCAL, ok=False)` renders FAILED, but no code path
+    builds that combination), and because reading the rendered samples is what
+    raised the question. If SPEC ever wants a true FAILED state, this is the test
+    to change.
+    """
+    import asyncio
+
+    from briefing.fetch.router import FetchResult, Method
+    from briefing.pipeline import Pipeline
+
+    class AlwaysFails:
+        async def fetch(self, url: str, snippet: str) -> FetchResult:
+            return FetchResult(method=Method.SNIPPET, ok=False, snippet=snippet)
+
+    class OneHit:
+        async def search(self, query: str):
+            return [{"title": "Gone", "url": "https://gone.example/x", "body": "a snippet"}]
+
+    report = asyncio.run(
+        Pipeline(
+            searcher=OneHit(),
+            router=AlwaysFails(),
+            extractor=None,
+            whitelist=None,
+        ).run("query")
+    )
+    assert report.results
+    shown = _render(badge(report.results[0].method, report.results[0].ok, plain=True))
+    assert "SNIPPET" in shown
+    assert "FAILED" not in shown
+    # And the snippet the run still has is on the card, which is the point.
+    assert "a snippet" in _render(card(report.results[0], plain=True))
     assert _render(badge(Method.LOCAL, True, plain=False)).strip() == "🟢 LOCAL"
     assert _render(badge(Method.API, True, plain=False)).strip() == "🟡 API"
     assert _render(badge(Method.SNIPPET, False, plain=False)).strip() == "⚪ SNIPPET"
@@ -183,6 +223,63 @@ def test_a_card_without_a_summary_still_renders() -> None:
     )
     assert "⚪ SNIPPET" in out
     assert "nation.africa" in out
+
+
+def test_a_snippet_only_card_shows_the_snippet_it_does_have() -> None:
+    """T3.5: the snippet is a snippet-only page's ONLY content.
+
+    Rendering it as heading + domain + URL and nothing else throws away the one
+    thing the run still knows about the page — which is the entire point of
+    degrading to snippet-only rather than failing. Found by reading the rendered
+    samples, not by the existing test, which only asserted what was absent.
+    """
+    out = _render(
+        card(
+            _result(
+                ok=False,
+                method=Method.SNIPPET,
+                summary="",
+                snippet="The central bank raised its lending rate.",
+            ),
+            plain=False,
+        ),
+    )
+    assert "⚪ SNIPPET" in out
+    assert "The central bank raised its lending rate." in out
+    # Not repeated: a real summary still means no snippet line.
+    assert out.count("The central bank raised its lending rate.") == 1
+
+
+def test_a_card_with_a_summary_does_not_also_show_the_snippet() -> None:
+    """The snippet is the fallback body, not a second body."""
+    out = _render(
+        card(_result(snippet="A SNIPPET THAT MUST NOT APPEAR"), plain=False),
+    )
+    assert "by fifty basis points" in out  # the summary
+    assert "A SNIPPET THAT MUST NOT APPEAR" not in out
+
+
+def test_the_footer_wraps_at_the_separator_when_the_terminal_is_narrow() -> None:
+    """T3.5: a narrow terminal must wrap between segments, not inside one.
+
+    Documenting the *known* limit rather than asserting it is fixed: Rich's
+    default word-wrap breaks `whitelist +1 (example.co.ke:` away from `captcha)`
+    and orphans `6.4s`, which reads badly. The two fixes both cost more than the
+    defect does — non-breaking spaces would break the plain-text substring
+    assertions the rest of this file depends on (`"2 snippet-only ·"`), and
+    teaching `footer()` the console width would change a pure function's
+    signature to serve a 60-column terminal. The footer is one line at the
+    100-column width the design targets; below that it degrades by wrapping.
+    """
+    report = _report(
+        _result(rank=1),
+        _result(rank=2, domain="standardmedia.co.ke", method=Method.API, ok=True),
+        _result(rank=3, domain="the-star.co.ke", ok=False, method=Method.SNIPPET),
+    )
+    report.whitelisted = [("a-very-long-domain-name.example.co.ke", "captcha on the page")]
+    console = Console(record=True, width=60)
+    console.print(footer(report, plain=True))
+    assert "3 found" in console.export_text(clear=False)
 
 
 # --- the footer ------------------------------------------------------------

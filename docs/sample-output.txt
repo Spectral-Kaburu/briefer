@@ -1,0 +1,234 @@
+`briefing` sample output
+========================
+
+Five runs rendered through the real `briefing.ui` renderers (T3.5), at the two
+widths that matter. No network, no pipeline: each scenario is a `Report` handed
+to the same functions `briefing research` calls, so these are the exact bytes the
+UI writes. Regenerate with `scripts/render_samples.py` rather than editing by
+hand.
+
+What each scenario is for:
+
+  1. All local, all good - the happy path, so the cards' normal state is on
+     record.
+  2. A barrier page recovered by the cloud API - the API badge and the whitelist
+     caption in the footer.
+  3. Everything degraded to snippets - local Firecrawl down, so every card is a
+     snippet and the snippet is the whole result.
+  4. A hard failure beside real results - a failed page that must not stop the
+     other cards rendering.
+  5. Long titles, long summaries, a long domain - the wrapping case.
+
+
+====================================================================================================
+1. All local, all good (the happy path)  [width 100]
+====================================================================================================
+ briefing ▸ research
+ Query: "kenya economy"   mode: text
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ 1  Kenya's economy grew 5.2% last quarter  LOCAL                                                 │
+│ nation.africa · 2h ago                                                                           │
+│ Kenya's economy grew 5.2 percent last quarter. Agriculture and services drove the expansion.     │
+│ https://nation.africa/kenya/economy-grew                                                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ 2  What the shilling's stability means for borrowers  LOCAL                                      │
+│ businessdaily.africa · 5h ago                                                                    │
+│ The shilling held steady against the dollar. Borrowers may see relief on dollar-denominated      │
+│ loans.                                                                                           │
+│ https://businessdaily.africa/shilling-stability                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                                    
+  5 found · 2 extracted (2 local) · 6.4s                                                            
+                                                                                                    
+
+================================================================================
+1. All local, all good (the happy path)  [width 80]
+================================================================================
+ briefing ▸ research
+ Query: "kenya economy"   mode: text
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ 1  Kenya's economy grew 5.2% last quarter  LOCAL                             │
+│ nation.africa · 2h ago                                                       │
+│ Kenya's economy grew 5.2 percent last quarter. Agriculture and services      │
+│ drove the expansion.                                                         │
+│ https://nation.africa/kenya/economy-grew                                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ 2  What the shilling's stability means for borrowers  LOCAL                  │
+│ businessdaily.africa · 5h ago                                                │
+│ The shilling held steady against the dollar. Borrowers may see relief on     │
+│ dollar-denominated loans.                                                    │
+│ https://businessdaily.africa/shilling-stability                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+                                                                                
+  5 found · 2 extracted (2 local) · 6.4s                                        
+                                                                                
+
+====================================================================================================
+2. A barrier page recovered by the API  [width 100]
+====================================================================================================
+ briefing ▸ research
+ Query: "kenya economy"   mode: text
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ 1  Paywalled: the full rate decision  API                                                        │
+│ paywalled.example · 1h ago                                                                       │
+│ The committee voted six to one to hold the rate. Inflation expectations were the deciding        │
+│ factor.                                                                                          │
+│ https://paywalled.example/rate-decision                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ 2  Regional comparison: East African central banks  LOCAL                                        │
+│ nation.africa · 3h ago                                                                           │
+│ Neighbouring central banks took different paths. Kenya held while others tightened.              │
+│ https://nation.africa/regional-banks                                                             │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                                    
+  6 found · 2 extracted (1 api, 1 local) · whitelist +1 (paywalled.example: captcha) · 9.1s         
+                                                                                                    
+
+================================================================================
+2. A barrier page recovered by the API  [width 80]
+================================================================================
+ briefing ▸ research
+ Query: "kenya economy"   mode: text
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ 1  Paywalled: the full rate decision  API                                    │
+│ paywalled.example · 1h ago                                                   │
+│ The committee voted six to one to hold the rate. Inflation expectations were │
+│ the deciding factor.                                                         │
+│ https://paywalled.example/rate-decision                                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ 2  Regional comparison: East African central banks  LOCAL                    │
+│ nation.africa · 3h ago                                                       │
+│ Neighbouring central banks took different paths. Kenya held while others     │
+│ tightened.                                                                   │
+│ https://nation.africa/regional-banks                                         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+                                                                                
+  6 found · 2 extracted (1 api, 1 local) · whitelist +1 (paywalled.example:     
+  captcha) · 9.1s                                                               
+                                                                                
+
+====================================================================================================
+3. Everything degraded to snippets (local down)  [width 100]
+====================================================================================================
+ briefing ▸ research
+ Query: "kenya economy"   mode: text
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ 1  Inflation eases to 4.1 percent  SNIPPET                                                       │
+│ nation.africa                                                                                    │
+│ Food prices fell for a third straight month.                                                     │
+│ https://nation.africa/inflation-eases                                                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ 2  Analysts split on the next move  SNIPPET                                                      │
+│ businessdaily.africa                                                                             │
+│ Half expect a cut by December.                                                                   │
+│ https://businessdaily.africa/analysts-split                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                                    
+  4 found · 2 snippet-only · 1.2s                                                                   
+                                                                                                    
+
+================================================================================
+3. Everything degraded to snippets (local down)  [width 80]
+================================================================================
+ briefing ▸ research
+ Query: "kenya economy"   mode: text
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ 1  Inflation eases to 4.1 percent  SNIPPET                                   │
+│ nation.africa                                                                │
+│ Food prices fell for a third straight month.                                 │
+│ https://nation.africa/inflation-eases                                        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ 2  Analysts split on the next move  SNIPPET                                  │
+│ businessdaily.africa                                                         │
+│ Half expect a cut by December.                                               │
+│ https://businessdaily.africa/analysts-split                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+                                                                                
+  4 found · 2 snippet-only · 1.2s                                               
+                                                                                
+
+====================================================================================================
+4. A hard failure alongside real results  [width 100]
+====================================================================================================
+ briefing ▸ research
+ Query: "kenya economy"   mode: text
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ 1  Central bank statement in full  LOCAL                                                         │
+│ nation.africa · 2h ago                                                                           │
+│ The governor defended the hold on Tuesday. He cited exchange-rate volatility.                    │
+│ https://nation.africa/statement-full                                                             │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ 2  Dead link: page returns 404  SNIPPET                                                          │
+│ gone.example                                                                                     │
+│ A story that has since been removed.                                                             │
+│ https://gone.example/old-story                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                                    
+  5 found · 1 extracted (1 local) · 1 snippet-only · 7.8s                                           
+                                                                                                    
+
+================================================================================
+4. A hard failure alongside real results  [width 80]
+================================================================================
+ briefing ▸ research
+ Query: "kenya economy"   mode: text
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ 1  Central bank statement in full  LOCAL                                     │
+│ nation.africa · 2h ago                                                       │
+│ The governor defended the hold on Tuesday. He cited exchange-rate            │
+│ volatility.                                                                  │
+│ https://nation.africa/statement-full                                         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ 2  Dead link: page returns 404  SNIPPET                                      │
+│ gone.example                                                                 │
+│ A story that has since been removed.                                         │
+│ https://gone.example/old-story                                               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+                                                                                
+  5 found · 1 extracted (1 local) · 1 snippet-only · 7.8s                       
+                                                                                
+
+====================================================================================================
+5. Long titles, long summaries, narrow and wide terminals  [width 100]
+====================================================================================================
+ briefing ▸ research
+ Query: "kenya economy"   mode: text
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ 1  A long headline that wraps once at eighty columns and shows the continuation line  API        │
+│ very-long-domain-name-here.example.co.ke · 4h ago                                                │
+│ The first sentence of this summary is long enough to wrap on its own at a narrow terminal width. │
+│ The second sentence follows it and should hang-indent to match, or the whole card loses its left │
+│ edge.                                                                                            │
+│ https://very-long-domain-name-here.example.co.ke/some/deep/path/story                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                                    
+  3 found · 1 extracted (1 api) · whitelist +1 (very-long-domain-name-here.example.co.ke: 403       
+  forbidden) · 5.0s                                                                                 
+                                                                                                    
+
+================================================================================
+5. Long titles, long summaries, narrow and wide terminals  [width 80]
+================================================================================
+ briefing ▸ research
+ Query: "kenya economy"   mode: text
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ 1  A long headline that wraps once at eighty columns and shows the           │
+│ continuation line  API                                                       │
+│ very-long-domain-name-here.example.co.ke · 4h ago                            │
+│ The first sentence of this summary is long enough to wrap on its own at a    │
+│ narrow terminal width. The second sentence follows it and should hang-indent │
+│ to match, or the whole card loses its left edge.                             │
+│ https://very-long-domain-name-here.example.co.ke/some/deep/path/story        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+                                                                                
+  3 found · 1 extracted (1 api) · whitelist +1                                  
+  (very-long-domain-name-here.example.co.ke: 403 forbidden) · 5.0s              
+                                                                                

@@ -77,8 +77,12 @@ def card(result: Result, *, plain: bool = False) -> Panel:
     body.append(top)
     body.append("\n")
     body.append(meta)
-    if result.summary:
-        body.append(f"\n{result.summary}")
+    # The summary is the body when there is one. A snippet-only page has no
+    # summary, and its snippet is the whole result — dropping it would leave a
+    # card that is a heading and a link with nothing read in between.
+    prose = result.summary or result.snippet
+    if prose:
+        body.append(f"\n{prose}")
     body.append(f"\n{result.url}", "blue")
     return Panel(body, box=box.ROUNDED, expand=True, padding=(0, 1))
 
