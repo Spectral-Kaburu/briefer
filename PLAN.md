@@ -57,8 +57,8 @@ Skills: `superpowers:test-driven-development`
 ## Phase 6: Hardening and docs
 Skills: `superpowers:verification-before-completion`, `superpowers:requesting-code-review`
 
-- [ ] **T6.1** Error-path sweep: every failure mode from SPEC section 4 produces a clear message; add missing tests. Timeouts and retries are configurable.
-- [ ] **T6.2** Logging (`--verbose`, log file path in `status`), no secrets in logs. *Accept*: test that keys never appear in logs or `--json` output.
+- [x] **T6.1** Error-path sweep: every failure mode from SPEC section 4 produces a clear message; add missing tests. Timeouts and retries are configurable.
+- [x] **T6.2** Logging (`--verbose`, log file path in `status`), no secrets in logs. *Accept*: test that keys never appear in logs or `--json` output.
 - [ ] **T6.3** `README.md`: install (`pipx install -e .`), config, Docker Firecrawl prerequisites, usage examples with sample output, whitelist behavior.
 - [ ] **T6.4** `docs/AETHER_INTEGRATION.md` plus `systemd/briefing.service` and `briefing.timer` examples (08:00 Africa/Nairobi), describing the IPC contract Aether must provide.
 - [ ] **T6.5** Full `make check`; run live smoke if `BRIEFING_LIVE=1` and local Firecrawl is up; final **[review]** of the whole repo against SPEC; fix findings.

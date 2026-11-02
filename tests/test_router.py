@@ -16,6 +16,7 @@ from briefing.fetch.api import ApiFirecrawl
 from briefing.fetch.errors import ErrorClass
 from briefing.fetch.local import LocalFirecrawl
 from briefing.fetch.router import FetchResult, Method, Router
+from briefing.log import configure
 from briefing.whitelist import Whitelist
 
 LOCAL = "http://localhost:3002"
@@ -433,3 +434,25 @@ async def test_one_bad_url_never_kills_fetch(router: Router) -> None:
     respx.post(f"{LOCAL}/v2/scrape").mock(return_value=httpx.Response(404, text="nope"))
     result = await router.fetch("https://dead.example/x")
     assert result.method is Method.SNIPPET
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_routing_decision_is_logged_for_the_debug_run(
+    router: Router, tmp_path: Path
+) -> None:
+    """T6.2's `--verbose`: the per-URL decision is what a debug run is for.
+
+    Without it the flag only mirrors the summary line to stderr and reveals
+    nothing, so this asserts on the decision itself, not on a line count.
+    """
+    log = tmp_path / "briefing.log"
+    configure(log_file=log, verbose=True)
+    respx.post(f"{LOCAL}/v2/scrape").mock(return_value=httpx.Response(403, text="nope"))
+    respx.post(f"{API}/v2/scrape").mock(
+        return_value=httpx.Response(200, json={"data": {"markdown": ARTICLE}})
+    )
+    await router.fetch("https://paywalled.example/story")
+    text = log.read_text(encoding="utf-8")
+    assert "https://paywalled.example/story" in text
+    assert "api" in text

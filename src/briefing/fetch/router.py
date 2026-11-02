@@ -13,10 +13,13 @@ import enum
 import typing as t
 
 from .. import extract as _extract
+from ..log import get_logger
 from ..whitelist import Whitelist, normalize_host
 from .api import ApiFirecrawl, ApiScrapeResult
 from .errors import ErrorClass
 from .local import LocalFirecrawl, LocalScrapeResult
+
+LOG = get_logger("briefing.fetch.router")
 
 # The one backoff SPEC allows between a transient attempt and its retry. SPEC
 # names no number, so it is a constructor argument; T6.1 makes it configurable.
@@ -79,16 +82,28 @@ class Router:
         `snippet` is the search result's own text, which is all that survives
         when every fetch path gives up.
         """
+        result = await self._route(url, snippet)
+        # One seam for every branch of the SPEC §4 table, so `--verbose` reports
+        # the decision rather than only the summary of the run that made it.
+        LOG.debug(
+            "routed %s -> %s%s",
+            url,
+            result.method.value,
+            f" ({result.warning})" if result.warning else "",
+        )
+        return result
+
+    async def _route(self, url: str, snippet: str) -> FetchResult:
         host = normalize_host(url)
 
         if self.prefer_api_for_whitelisted and self.whitelist.is_whitelisted(host):
             return await self._via_api(url, host, "domain is whitelisted", snippet)
 
-        result = await self.local.scrape(url)
-        if result.ok:
-            return self._local_result(result)
+        local = await self.local.scrape(url)
+        if local.ok:
+            return self._local_result(local)
 
-        return await self._failed(url, host, result, snippet)
+        return await self._failed(url, host, local, snippet)
 
     async def _failed(
         self,

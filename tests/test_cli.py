@@ -587,6 +587,79 @@ def test_status_counts_todays_api_calls(monkeypatch: t.Any, tmp_path: t.Any) -> 
     assert "1" in result.stdout
 
 
+# --- logging (T6.2) -------------------------------------------------------
+
+
+def test_status_names_the_log_file(monkeypatch: t.Any, tmp_path: t.Any) -> None:
+    """T6.2: "log file path in status", so a support question can point at it."""
+    _status_env(monkeypatch, tmp_path)
+    result = runner.invoke(app, ["status"])
+    assert result.exit_code == 0, result.stderr
+    assert str(tmp_path / "briefing.log") in result.stdout
+
+
+def test_research_help_lists_verbose() -> None:
+    result = runner.invoke(app, _VERBOSE_HELP)
+    assert "--verbose" in result.stdout
+
+
+def test_run_help_lists_verbose() -> None:
+    result = runner.invoke(app, ["run", "--help"])
+    assert "--verbose" in result.stdout
+
+
+def test_the_key_never_reaches_the_log_file_or_the_json(
+    monkeypatch: t.Any, tmp_path: t.Any
+) -> None:
+    """T6.2's acceptance: the key appears in neither sink, at any verbosity.
+
+    The pipeline is faked but the config and the logger are the real ones, and
+    `cli_module.LOG` is driven with the key to prove the filter *fires* rather
+    than the key happening to be absent: an assertion of absence alone would
+    also pass against a logger that redacts nothing.
+    """
+    _configure(_report(), monkeypatch)
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-secret-key-123")
+    result = runner.invoke(app, ["research", "kenya news", "--verbose", "--json"])
+    assert result.exit_code == 0, result.stderr
+    log = (tmp_path / "briefing.log").read_text(encoding="utf-8")
+    assert "fc-secret-key-123" not in log
+    assert "fc-secret-key-123" not in result.stdout
+
+    # A leak through this same logger must be masked, not merely avoided.
+    cli_module.LOG.info("resolved key %s", "fc-secret-key-123")
+    masked = (tmp_path / "briefing.log").read_text(encoding="utf-8")
+    assert "fc-secret-key-123" not in masked
+    assert "***" in masked
+
+
+def test_a_verbose_run_logs_its_decisions(tmp_path: Path, monkeypatch: t.Any) -> None:
+    """Without --verbose the log stays quiet about the query; with it, it says.
+
+    Asserted on the query because that is the one thing a debug log exists to
+    record: what was asked, and of which searcher.
+    """
+    _configure(_report(), monkeypatch)
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    runner.invoke(app, ["research", "kenya economy news", "--verbose"])
+    text = (tmp_path / "briefing.log").read_text(encoding="utf-8")
+    assert "kenya economy news" in text
+
+
+def test_the_r_shorthand_also_writes_the_log_file(tmp_path: Path, monkeypatch: t.Any) -> None:
+    """The headline path must not be the one that skips logging setup.
+
+    The shorthand passes no flags, so this is what proves the install of the
+    log handlers does not depend on `--verbose` being given.
+    """
+    _configure(_report(), monkeypatch)
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    result = runner.invoke(app, ["-r", "kenya economy news"])
+    assert result.exit_code == 0, result.stderr
+    assert (tmp_path / "briefing.log").exists()
+
+
 # --- config (T3.4) ---------------------------------------------------------
 
 

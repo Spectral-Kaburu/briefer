@@ -879,5 +879,20 @@ had 30s baked in), plus `firecrawl.local.concurrency`, which `briefing config`
 displayed but never passed to the pipeline. Suite: 510 passed, 4 skipped;
 `make check` green; verifier VERIFIED.
 
+**T6.2 (2026-11-02)**: logging is a real sink rather than a promise that nobody logs
+the key. `src/briefing/log.py` holds `configure()` plus one `SecretFilter` on every
+handler; the CLI resolves the key at call time and hands it to the filter, so a leak
+is masked rather than merely absent. Three details the first cut got wrong, all found
+by review and now covered by tests: the filter is on *handlers* (child module loggers
+inherit it), `exc_info` is re-rendered into masked `exc_text` (a traceback renders
+separately and printed the key in full), and reconfigure closes only the `FileHandler`
+it owns so it cannot take `sys.stderr` with it. `--verbose` lowers both sinks to
+DEBUG, not just stderr, because an unattended run has no stderr afterwards; to earn
+the flag `Router.fetch` is now a wrapper logging one decision per URL over
+`_route()`. `status` gained a log-file row, and `config` already named one.
+Suite: 531 passed, 4 skipped; `make check` green; verifier PASS (the acceptance test
+proves the filter fires, not just that the key is absent). One review finding was a
+false positive, settled by test rather than argument — see D19.
+
 
 

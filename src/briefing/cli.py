@@ -29,6 +29,8 @@ from briefing.extract import Extracted, extract
 from briefing.fetch.api import ApiFirecrawl, usage_today
 from briefing.fetch.local import LocalFirecrawl
 from briefing.fetch.router import Router
+from briefing.log import configure as configure_logging
+from briefing.log import get_logger
 from briefing.pipeline import Pipeline, Report
 from briefing.search import Searcher
 from briefing.synth import Gemini, Speaker
@@ -98,6 +100,24 @@ def _STATE_DIR() -> Path:
     return _default_state_dir()
 
 
+LOG = get_logger("briefing.cli")
+
+
+def _configure_logging(loaded: Config, verbose: bool) -> None:
+    """Turn the configured log file on, and stderr too when `--verbose`.
+
+    The key is resolved here because this is the one place that already has it:
+    `log.configure` filters it out of every record, so a future log line holding
+    the whole config (or an exception quoting a request) cannot leak it.
+    """
+    key = resolve_api_key(loaded, os.environ)
+    configure_logging(
+        log_file=loaded.paths.log_file,
+        verbose=verbose,
+        secrets=[key] if key else [],
+    )
+
+
 app = typer.Typer(
     help="Search the web, extract pages, and summarize the results.",
     no_args_is_help=True,
@@ -147,6 +167,7 @@ def research(
     no_api: bool = typer.Option(False, "--no-api", help="Never call the Firecrawl API."),
     json_out: bool = typer.Option(False, "--json", help="Emit the report as JSON."),
     plain: bool | None = typer.Option(None, "--plain/--no-plain", help="Plain text, no color."),
+    verbose: bool = typer.Option(False, "--verbose", help="Log each decision to stderr."),
     config: str = typer.Option(None, "--config", help="Path to a briefing.yaml to load."),
 ) -> None:
     """Search the web for QUERY, extract each page, and summarize what was found.
@@ -174,6 +195,7 @@ def research(
         json_out=json_out,
         plain=plain,
         config=config,
+        verbose=verbose,
     )
 
 
@@ -295,6 +317,8 @@ def status() -> None:
             used < loaded.firecrawl.api.daily_limit,
             f"{used} of {loaded.firecrawl.api.daily_limit} calls today",
         ),
+        # T6.2: naming the log file is what makes a bug report answerable.
+        row("log file", True, str(loaded.paths.log_file)),
     ]
     for line in lines:
         typer.echo(line)
@@ -356,6 +380,7 @@ def _research(
     json_out: bool = False,
     plain: bool | None = None,
     config: str | None = None,
+    verbose: bool = False,
 ) -> None:
     """Wire the collaborators from config, run the pipeline, render the report.
 
@@ -368,6 +393,7 @@ def _research(
             "Pick one: drop --news, or drop --web.",
         )
     loaded = _load(config)
+    _configure_logging(loaded, verbose)
 
     if results is not None and results < 1:
         _fail(f"--results must be at least 1, not {results}.", "Try a value like 10.")
@@ -399,11 +425,20 @@ def _research(
         ui.show(report)
     else:
         typer.echo(json.dumps(_as_json(report), indent=2))
+    LOG.info(
+        "research %r via %s search: %d results, %d fetched ok, %.1fs",
+        query,
+        searcher.mode_for(query) or "auto",
+        report.found,
+        report.succeeded,
+        report.elapsed_s,
+    )
 
 
 @app.command()
 def run(
     dry_run: bool = typer.Option(False, "--dry-run", help="Print the command, speak nothing."),
+    verbose: bool = typer.Option(False, "--verbose", help="Log each decision to stderr."),
     config: str = typer.Option(None, "--config", help="Path to a YAML config file."),
 ) -> None:
     """Run the morning briefing now: the scheduler's entry point (SPEC section 6).
@@ -414,6 +449,7 @@ def run(
     silence is the one outcome a morning briefing must not produce.
     """
     loaded = _load(config)
+    _configure_logging(loaded, verbose)
     asyncio.run(_briefing(loaded, dry_run=dry_run))
 
 

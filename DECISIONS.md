@@ -190,3 +190,36 @@ dry-run case. A *failed* delivery never reaches that line — `deliver` raises a
 `_fail` exits first. The two behaviours (dry run records nothing, failed delivery
 records nothing) are correct and tested, but they are enforced by different code,
 which is why the dry-run test asserts on the store file directly.
+
+## D19 — 2026-11-02 · redaction is one filter on every sink, not a promise (T6.2)
+
+T6.2 needed `--verbose`, a log path in `status`, and "no secrets in logs". **Decision**:
+`src/briefing/log.py` owns one `configure()` and one `SecretFilter`, and the CLI
+resolves the API key at call time and hands it to the filter rather than the filter
+reading the environment.
+
+**Reason**: the alternative — "we never log the key" — is a promise the next log
+line breaks silently. The filter is blind (it masks the value it was given, nothing
+else), so it costs nothing until something does leak, and then it fails safe. Two
+details are load-bearing and easy to lose: the filter is attached to *handlers*, not
+the logger, so records from child module loggers are masked too; and `exc_info` is
+rendered into a masked `exc_text` and cleared, because a traceback renders separately
+from `msg`/`args` and would otherwise print the key in full.
+
+`--verbose` lowers **both** sinks to DEBUG rather than only adding stderr: an
+unattended `briefing run --verbose` has no stderr left to read afterwards, so a
+debug record that only reaches the terminal is useless to the systemd case T6.4
+builds. To make the flag worth its name, `Router.fetch` is now a thin wrapper that
+logs one decision line per URL over `_route()` — one seam covers every branch of
+the SPEC §4 table, where a line in each of the three result constructors would not.
+
+A review raised two further defects here, one real and one not. The real one: closing
+every replaced handler closed a `FileHandler`'s descriptor *and* would take stderr
+with it, so `configure` now closes only what it owns (`FileHandler`) and detaches the
+rest — `StreamHandler` was given `sys.stderr`, not sold it. The false positive was
+the same concern argued from `StreamHandler.close()` closing its stream; a test that
+reconfigures verbose→quiet and then writes to stderr passes either way, which is how
+it was settled rather than by reading CPython. Kept anyway, because it is the one
+assertion that would catch someone "fixing" the handler loop to close everything.
+The log is unrotated: `shortcut:` comment in `log.py` names the volume and the
+upgrade path.
