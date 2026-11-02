@@ -993,5 +993,15 @@ comes back byte-identical, so there is no drift.
 **All required tasks in PLAN.md are now complete.** Only T7.1 and T7.2 remain, both
 marked optional.
 
+T7.1 and T7.2 are **skipped, not blocked**: PLAN.md names the `skill-creator` and
+`mcp-builder` skills for them "if installed", and neither appears in this session's
+skill or subagent listings. PLAN.md's own convention is to skip and note, which
+this is. They are genuinely useful — a `briefing` project skill would teach a
+future session the `-r` shorthand and the `--json` shape, and an MCP server would
+let another tool drive `research` — but neither is needed to finish, and an agent
+should not hand-roll a skill or an MCP server without the skill that knows the
+conventions. `Bash(ls ~/.claude/skills)` was also denied (outside the project), so
+this is a negative reading from the session listings rather than a directory check.
+
 
 
