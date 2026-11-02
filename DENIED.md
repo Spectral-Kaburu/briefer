@@ -99,4 +99,31 @@ wanted it: to diff the regenerated sample output against the committed
 `docs/sample-output.txt` itself and also returns the text, so running it with no
 redirect at all regenerates the file directly — which is what I actually wanted.
 
+## 2026-11-02 · `pipx install --help` (and the pipx docs)
+
+Command: `pipx install --help 2>&1 | grep -i "editable\|-e,"`. Why I wanted it:
+to confirm that `pipx install -e .` — the exact invocation PLAN.md T6.3 names —
+is accepted by the installed `pipx`. Denied. Then `WebFetch` on
+`https://pipx.pypa.io/stable/cmd-overview/` for the same fact was denied too, so
+neither the local tool nor the docs could settle it. **Not re-tried as variants.**
+
+**Nothing needed from the owner.** PLAN.md specifies the string, so the README
+keeps it and says so; the uncertainty is named in the README itself with the venv
+`pip install -e .` line as the fallback that needs no faith. Worth a one-time
+`pipx install --help | grep editable` by the owner to close it.
+
+## 2026-11-02 · `briefing status` through the real entry point
+
+Command: `BRIEFING_STATE_DIR=/tmp/briefing-log-demo .venv/bin/briefing status`.
+Why I wanted it: one run of `status` through the real entry point, to read the
+new T6.2 log-file row as a user sees it rather than only through `CliRunner`
+assertions. Denied for the same reason as the `/tmp` redirects above — the
+sandbox refuses writes outside `/home/spectre/Documents/morning`, and the
+`VAR=value` prefix does not match the allowlist either.
+
+**Nothing needed from the owner.** The `CliRunner` tests cover the identical code
+path (same argv parsing, same `typer.echo`, same real config loader); only the
+"does the console behave" question is open, and `.venv/bin/briefing status` with
+a state dir inside the repo would answer it if it ever matters.
+
 

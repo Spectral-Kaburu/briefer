@@ -223,3 +223,24 @@ it was settled rather than by reading CPython. Kept anyway, because it is the on
 assertion that would catch someone "fixing" the handler loop to close everything.
 The log is unrotated: `shortcut:` comment in `log.py` names the volume and the
 upgrade path.
+
+## D20 — 2026-11-02 · the README does not point at files that do not exist yet (T6.3)
+
+A first cut of the README referenced `docs/AETHER_INTEGRATION.md` and `systemd/`
+as though they were there. Both are **T6.4**, unchecked at the time of writing, so
+the README shipped two dead references on its most important surfaces. **Decision**:
+those two references are stated as pending, with the T6.4 task named, and a note
+that nothing in briefing mode depends on them — run `briefing run` from cron today
+and the Aether contract only matters when Aether shows up.
+
+**Reason**: a README that promises documents it does not contain teaches the
+reader not to trust the rest of it, and the fix is free — say "not yet" instead of
+linking nothing. The alternative was to write T6.4 first, but T6.3's content was
+already accurate and reordering the plan to satisfy a doc's link is the tail
+wagging the dog.
+
+Also recorded here: PLAN.md T6.3 names `pipx install -e .` verbatim, so the README
+keeps it, but `pipx --help` and the pipx docs were both denied in this sandbox,
+which means that flag is asserted rather than verified (see DENIED.md). The venv
+`pip install -e .` line sits beside it as the fallback that needs no faith, and the
+README says so.

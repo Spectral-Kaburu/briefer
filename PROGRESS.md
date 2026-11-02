@@ -894,5 +894,29 @@ Suite: 531 passed, 4 skipped; `make check` green; verifier PASS (the acceptance 
 proves the filter fires, not just that the key is absent). One review finding was a
 false positive, settled by test rather than argument — see D19.
 
+**T6.3 (2026-11-02)**: README rewritten from a 14-line stub to the full surface
+PLAN names — install (`pipx install -e .` with a venv fallback), config schema,
+Docker Firecrawl prerequisites (version pinned to v2.11.162, the version the API
+paths were written against), usage examples, whitelist behaviour, dev commands and
+a doc table. Embedded one real sample block for the happy path rather than only
+linking the file.
+
+Two findings worth recording. The first cut referenced `docs/AETHER_INTEGRATION.md`
+and `systemd/` as if present — both are T6.4 and unchecked, so the README shipped
+two dead links; they are now marked pending with the task named, and briefing mode
+is noted as needing no Aether dependency (see D20). Second, PLAN.md T6.3 names
+`pipx install -e .` verbatim, but `pipx --help` and the pipx docs were both denied
+here, so that flag is asserted rather than verified — the README says so and the
+venv line sits beside it as the fallback (DENIED.md).
+
+The verifier ran a byte-identity check on the embedded sample that PLAN.md does not
+ask for and reported FAIL on trailing whitespace alone: all 11 lines match
+`docs/sample-output.txt`, every bordered line keeps its interior padding (so the
+card renders identically), and only trailing column padding was dropped — invisible
+when rendered, and a lint problem if kept in source. Not re-aligned to satisfy it,
+because 100 columns of invisible whitespace in a README is a cost with no reader who
+benefits. `docs/sample-output.txt` remains the canonical artifact.
+Suite: 531 passed, 4 skipped; `make check` green.
+
 
 
