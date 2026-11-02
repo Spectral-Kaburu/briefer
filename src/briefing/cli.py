@@ -33,8 +33,8 @@ from briefing.log import configure as configure_logging
 from briefing.log import get_logger
 from briefing.pipeline import Pipeline, Report
 from briefing.search import Searcher
-from briefing.synth import Gemini, Speaker
-from briefing.ui import UI
+from briefing.synth import Gemini, ResearchSynth, Speaker
+from briefing.ui import UI, answer
 from briefing.whitelist import Whitelist, WhitelistEntry, normalize_host
 
 
@@ -78,6 +78,15 @@ def _speaker(loaded: Config, session_summary: str = "") -> Speaker:
     return Speaker(Gemini(), name=loaded.briefing.name, session_summary=session_summary)
 
 
+def _summarizer(loaded: Config) -> ResearchSynth:
+    """`--llm` and `--synth`: research mode's two Gemini calls, one client.
+
+    Brief mode's `Speaker` and this both wrap a `Gemini`, so a run makes at most
+    one client and neither mode pays for the other's.
+    """
+    return ResearchSynth(Gemini())
+
+
 # The seams the tests patch by name, so a whole run's collaborator graph swaps
 # without touching a running event loop. Real code uses the real things.
 _PIPELINE = Pipeline
@@ -86,6 +95,7 @@ _SEARCH = _search
 _SPEAKER = _speaker
 _AUDIO = _audio
 _DEDUP = _dedup
+_SUMMARIZER = _summarizer
 
 
 def _STATE_DIR() -> Path:
@@ -196,6 +206,8 @@ def research(
         plain=plain,
         config=config,
         verbose=verbose,
+        llm=llm,
+        synth=synth,
     )
 
 
@@ -381,6 +393,8 @@ def _research(
     plain: bool | None = None,
     config: str | None = None,
     verbose: bool = False,
+    llm: bool = False,
+    synth: bool = False,
 ) -> None:
     """Wire the collaborators from config, run the pipeline, render the report.
 
@@ -406,6 +420,9 @@ def _research(
 
     whitelist = _whitelist(loaded)
     ui = None if json_out else UI(plain=plain)
+    # Built only when a flag asks for it. Neither Gemini feature is on by default
+    # (SPEC section 2), and a client that is never called is never built.
+    summarizer = _SUMMARIZER(loaded) if (llm or synth) else None
     pipeline = _PIPELINE(
         searcher=searcher,
         router=_router(loaded, no_api, whitelist),
@@ -413,6 +430,7 @@ def _research(
         whitelist=whitelist,
         concurrency=loaded.firecrawl.local.concurrency,
         timeout_s=loaded.timeouts.per_url_s,
+        summarizer=summarizer,
     )
     if ui is not None:
         # The header names the mode the run will actually use, not a second guess.
@@ -421,10 +439,20 @@ def _research(
         report = asyncio.run(pipeline.run(query, on_event=None if ui is None else ui.on_event))
     except KeyboardInterrupt:  # pragma: no cover - interactive only
         _fail("Interrupted.", "Run the same command again; partial results were not saved.")
+    # `--synth` is its own call, after the run: it answers from every page, so it
+    # has nothing to say until the run is over. Second `asyncio.run` rather than a
+    # nested one, because the pipeline's loop is already closed by then.
+    answer_text = (
+        asyncio.run(summarizer.answer(query=query, sources=_answer_sources(report)))
+        if synth and summarizer is not None
+        else None
+    )
     if ui is not None:
         ui.show(report)
+        if answer_text:
+            ui.console.print(answer(answer_text))
     else:
-        typer.echo(json.dumps(_as_json(report), indent=2))
+        typer.echo(json.dumps(_as_json(report, answer_text), indent=2))
     LOG.info(
         "research %r via %s search: %d results, %d fetched ok, %.1fs",
         query,
@@ -589,14 +617,28 @@ def _timelimit(time: str) -> str | None:
     return mapping[time]
 
 
-def _as_json(report: Report) -> dict[str, t.Any]:
+def _answer_sources(report: Report) -> list[tuple[str, str]]:
+    """(title, summary) per page worth citing, numbered later by `ResearchSynth`.
+
+    Only pages the run actually got content for: a failed fetch has no summary to
+    cite, and a source the answer invents from a snippet is worse than no source.
+    """
+    return [
+        (result.title or result.heading, result.summary)
+        for result in report.results
+        if result.ok and result.summary
+    ]
+
+
+def _as_json(report: Report, answer: str | None = None) -> dict[str, t.Any]:
     """The report as JSON (SPEC section 3): every field a consumer would want.
 
     `method` and `error_class` are strings so a JSON reader gets the same badge
     vocabulary the terminal shows, and `ok` lets a consumer filter without
-    knowing the enum.
+    knowing the enum. `answer` is the `--synth` answer, absent without the flag so
+    a consumer never filters a field it did not ask for.
     """
-    return {
+    payload: dict[str, t.Any] = {
         "found": report.found,
         "succeeded": report.succeeded,
         "elapsed_s": report.elapsed_s,
@@ -622,6 +664,9 @@ def _as_json(report: Report) -> dict[str, t.Any]:
             for result in report.results
         ],
     }
+    if answer is not None:
+        payload["answer"] = answer
+    return payload
 
 
 def _fail(message: str, hint: str) -> t.NoReturn:

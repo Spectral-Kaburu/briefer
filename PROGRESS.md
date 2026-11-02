@@ -918,5 +918,38 @@ because 100 columns of invisible whitespace in a README is a cost with no reader
 benefits. `docs/sample-output.txt` remains the canonical artifact.
 Suite: 531 passed, 4 skipped; `make check` green.
 
+**T6.4** — the Aether IPC contract doc plus the systemd service and timer. The
+reviewer found real errors in the doc I had written, fixed over three rounds:
+`seen_headlines.json`'s list key is `entries`, not `headlines` (an implementer
+following the doc would have written a store that reads as empty); and I got the
+UTC/EAT schedule-id explanation wrong twice — first claiming the divergence window
+was 21:00–24:00 EAT when EAT is UTC+3, so it is 00:00–03:00, then overstating that
+a run after 03:00 EAT "gates normally" when an evening run is not gated either.
+The correct, smaller statement now in the doc: the id carries the UTC date, and
+the only manual run that suppresses a scheduled briefing is one between 03:00 and
+08:00 EAT. The timer's `STATE_DIRECTORY=` note was also wrong as a remedy for an
+unwritable persistence stamp, and has been dropped rather than replaced with
+another unverified claim.
+
+`systemd-analyze verify` is denied here, so both units are reviewed-but-unparsed:
+directives were checked against the code they run (exit 0 on refusal, exit 1 on
+failure, PATH for `voice-tts`, the state dir), not against systemd itself. One
+command from the owner closes it — see DENIED.md.
+
+**T4.1** — `--llm` and `--synth` now do something. `ResearchSynth` (abstractive
+per-page summary + one overall answer with numbered sources) shares a new
+`_generate` helper with `Speaker`, so both briefing and research mode degrade the
+same way on any model failure. The abstractive summary is produced inside
+`Pipeline._summarize`, which gained an optional `summarizer`, because `Result`
+carries no markdown and re-summarising a two-sentence extract would be a hollow
+version of the feature (D21). `--synth` runs after the run, as a second
+`asyncio.run`, since it answers from every page at once.
+
+The refactor initially broke `Speaker`: moving the prompt build outside the new
+helper's `try` turned a lost `prompts/briefing.txt` into a `FileNotFoundError`
+instead of the SPEC section 6 greeting. The existing test caught it, and the fix
+is that `_generate` builds the prompt inside the guard. Suite: 550 passed, 4
+skipped; `make check` green.
+
 
 

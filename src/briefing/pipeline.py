@@ -140,6 +140,7 @@ class Pipeline:
         concurrency: int = _DEFAULT_CONCURRENCY,
         timeout_s: float | None = _DEFAULT_TIMEOUT_S,
         progress: Progress | None = None,
+        summarizer: t.Any | None = None,
     ) -> None:
         self.searcher = searcher
         self.router = router
@@ -148,6 +149,10 @@ class Pipeline:
         self.concurrency = concurrency
         self.timeout_s = timeout_s
         self.progress = progress if progress is not None else Progress()
+        # T4.1's `--llm`. None is the default and means extractive-only; the
+        # summarizer runs inside the same semaphore, so `--llm` costs no extra
+        # concurrency over the fetch it follows.
+        self.summarizer = summarizer
 
     def _emit(self, event: Event, on_event: t.Callable[[Event], None] | None) -> None:
         self.progress.record(event)
@@ -221,7 +226,7 @@ class Pipeline:
             except Exception as exc:  # noqa: BLE001 - one bad URL never kills the run
                 result = _failed(hit, rank, ErrorClass.DEAD, str(exc))
             else:
-                result = _assembled(hit, rank, fetched, self._summarize(fetched))
+                result = _assembled(hit, rank, fetched, await self._summarize(fetched))
             self._emit(
                 Event(
                     kind="finished",
@@ -278,15 +283,30 @@ class Pipeline:
                 warning=f"Timed out after {self.timeout_s}s.",
             )
 
-    def _summarize(self, fetched: FetchResult) -> tuple[str, str]:
-        """Heading and summary from the router's markdown. Never raises."""
+    async def _summarize(self, fetched: FetchResult) -> tuple[str, str]:
+        """Heading and summary from the router's markdown. Never raises.
+
+        With a summarizer injected (`--llm`), its answer replaces the extractive
+        one and the extractive one is the fallback it degrades to. A page with no
+        markdown is left alone: there is nothing to abstract from, and asking a
+        model to summarise a page it never saw is how a briefing invents news.
+        """
         if not fetched.markdown:
             return fetched.heading, fetched.summary
         try:
             extracted = self.extractor.extract(fetched.markdown, url="")
         except Exception:  # noqa: BLE001 - a bad extraction degrades to snippet
             return fetched.heading, fetched.summary
-        return _pair(extracted)
+        heading, summary = _pair(extracted)
+        if self.summarizer is None:
+            return heading, summary
+        try:
+            abstractive = await self.summarizer.summary(
+                heading=heading, text=fetched.markdown, fallback=summary
+            )
+        except Exception:  # noqa: BLE001 - a summarizer that fails leaves the extractive one
+            return heading, summary
+        return heading, abstractive
 
 
 def _mode(query: str) -> str:

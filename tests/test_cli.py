@@ -116,6 +116,104 @@ def test_the_r_shorthand_is_documented() -> None:
     assert "-r" in result.stdout
 
 
+# --- --llm and --synth (T4.1; SPEC section 2) --------------------------------
+
+#: What the fake model answers. Set per test rather than once, because the
+#: "said nothing" case leaves the class attribute None and would otherwise leak
+#: into the next test.
+ANSWER = "The bank held its rate steady."
+
+
+class FakeSummarizer:
+    """Stands in for `ResearchSynth`: no Gemini client is ever constructed.
+
+    Class-level for the same reason `FakePipeline` is — the CLI builds the real
+    factory internally, so the test reads back what it built and what it asked.
+    """
+
+    built: t.ClassVar[dict[str, t.Any]] = {}
+    #: What the fake answers; None is the "model said nothing" case.
+    text: t.ClassVar[str | None] = "The bank held its rate steady."
+
+    def __init__(self, loaded: t.Any = None) -> None:
+        # The seam is called with the config positionally, the way the real
+        # `_summarizer(loaded)` is, even though this fake ignores it.
+        FakeSummarizer.built = {"loaded": loaded}
+
+    async def summary(self, *, heading: str, text: str, fallback: str) -> str:
+        FakeSummarizer.built["summary_call"] = (heading, fallback)
+        return "An abstractive summary."
+
+    async def answer(self, *, query: str, sources: t.Sequence[tuple[str, str]]) -> str | None:
+        FakeSummarizer.built["answer_query"] = query
+        FakeSummarizer.built["answer_sources"] = list(sources)
+        return FakeSummarizer.text
+
+
+def test_llm_hands_the_pipeline_a_summarizer(monkeypatch: t.Any) -> None:
+    """SPEC section 2's `--llm`: the pipeline gets something to summarise with."""
+    _configure(_report(), monkeypatch)
+    monkeypatch.setattr(cli_module, "_SUMMARIZER", FakeSummarizer)
+    runner.invoke(app, ["research", "bank rate", "--llm"])
+    assert isinstance(FakePipeline.built["summarizer"], FakeSummarizer)
+
+
+def test_without_llm_the_summarizer_is_never_built(monkeypatch: t.Any) -> None:
+    """The extractive default must not construct a Gemini client it will not use."""
+    _configure(_report(), monkeypatch)
+    builds: list[int] = []
+    monkeypatch.setattr(cli_module, "_SUMMARIZER", lambda _loaded: builds.append(1))
+    runner.invoke(app, ["research", "bank rate"])
+    assert builds == []
+    assert FakePipeline.built["summarizer"] is None
+
+
+def test_synth_prints_the_answer_after_the_cards(monkeypatch: t.Any) -> None:
+    """SPEC section 2's `--synth`: one answer, over the numbered results."""
+    _configure(_report(), monkeypatch)
+    monkeypatch.setattr(cli_module, "_SUMMARIZER", FakeSummarizer)
+    FakeSummarizer.text = ANSWER
+    result = runner.invoke(app, ["research", "bank rate", "--synth"])
+    assert ANSWER in result.stdout
+
+
+def test_synth_asks_about_the_query_with_a_source_per_result(monkeypatch: t.Any) -> None:
+    """The answer cites sources, so the prompt is numbered per fetched page."""
+    _configure(_report(), monkeypatch)
+    monkeypatch.setattr(cli_module, "_SUMMARIZER", FakeSummarizer)
+    runner.invoke(app, ["research", "bank rate", "--synth"])
+    assert FakeSummarizer.built["answer_query"] == "bank rate"
+    assert FakeSummarizer.built["answer_sources"] == [
+        ("Bank raises rate", "A two sentence summary.")
+    ]
+
+
+def test_synth_prints_no_answer_block_when_the_model_has_none(monkeypatch: t.Any) -> None:
+    """A model that cannot answer leaves the cards as the answer, unadorned."""
+    FakeSummarizer.text = None
+    _configure(_report(), monkeypatch)
+    monkeypatch.setattr(cli_module, "_SUMMARIZER", FakeSummarizer)
+    result = runner.invoke(app, ["research", "bank rate", "--synth"])
+    assert "Answer" not in result.stdout
+    assert "A two sentence summary." in result.stdout
+
+
+def test_json_carries_the_synth_answer(monkeypatch: t.Any) -> None:
+    """A `--json` consumer gets the answer as a field, not as text to scrape."""
+    _configure(_report(), monkeypatch)
+    monkeypatch.setattr(cli_module, "_SUMMARIZER", FakeSummarizer)
+    FakeSummarizer.text = ANSWER
+    result = runner.invoke(app, ["research", "bank rate", "--synth", "--json"])
+    assert json.loads(result.stdout)["answer"] == ANSWER
+
+
+def test_json_has_no_answer_field_without_synth(monkeypatch: t.Any) -> None:
+    """`--synth` is opt-in, so its field is absent unless it was asked for."""
+    _configure(_report(), monkeypatch)
+    result = runner.invoke(app, ["research", "bank rate", "--json"])
+    assert "answer" not in json.loads(result.stdout)
+
+
 # --- the -r shorthand ----------------------------------------------------
 
 

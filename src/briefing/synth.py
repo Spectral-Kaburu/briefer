@@ -1,4 +1,4 @@
-"""Gemini synthesis for briefing mode (T5.3; SPEC section 6).
+"""Gemini synthesis: briefing mode (T5.3) and research mode (T4.1).
 
 The prompt lives in `prompts/briefing.txt` rather than in this file, so the
 owner can reword the briefing without a code change. It is read per call, not at
@@ -121,10 +121,83 @@ class Speaker:
         """
         if not headlines:
             return SpokenBriefing(_greeting(self.name), fallback=True)
-        try:
-            text = await self.gemini.generate(self.prompt(headlines))
-        except Exception:  # noqa: BLE001 - any model failure degrades to the greeting
+        text = await _generate(self.gemini, lambda: self.prompt(headlines))
+        if text is None:
             return SpokenBriefing(_greeting(self.name), fallback=True)
-        if text is None or not text.strip():
-            return SpokenBriefing(_greeting(self.name), fallback=True)
-        return SpokenBriefing(text.strip(), fallback=False)
+        return SpokenBriefing(text, fallback=False)
+
+
+async def _generate(gemini: t.Any, prompt: t.Callable[[], str]) -> str | None:
+    """The model's usable text for the prompt `prompt()` builds, or None.
+
+    The one place a model failure becomes a value rather than an exception. Both
+    `Speaker` and `ResearchSynth` go through it, because SPEC section 6's fallback
+    and section 2's `--llm` degrade the same way: a model that raises, returns
+    nothing, or returns only whitespace is a model that said nothing.
+
+    Building the prompt is inside the try for the same reason — a lost
+    `prompts/briefing.txt` is a repo that cannot speak a briefing, which is the
+    greeting, not a crash.
+    """
+    try:
+        text = await gemini.generate(prompt())
+    except Exception:  # noqa: BLE001 - any failure degrades, never raises
+        return None
+    if text is None or not text.strip():
+        return None
+    return str(text).strip()
+
+
+# Research mode's prompts. They are not files like `prompts/briefing.txt` because
+# nothing in SPEC section 2 asks for the owner to reword them; if that changes,
+# move both to `prompts/` and read them per call the way `load_prompt` does.
+_ABSTRACTIVE_PROMPT = (
+    "Summarise the page below in two sentences, using only what it says. If it says\n"
+    "nothing of substance, say so rather than inventing anything.\n\n"
+    "Heading: {heading}\n\n{text}"
+)
+
+_ANSWER_PROMPT = (
+    "Answer the question in three sentences or fewer, using only the sources below.\n"
+    "Cite each claim's source as its number in brackets, e.g. [1]. If the sources do\n"
+    "not answer it, say that instead of guessing.\n\n"
+    "Question: {query}\n\n{sources}"
+)
+
+
+class ResearchSynth:
+    """Research mode's two Gemini features: abstractive summaries, one answer.
+
+    `--llm` rewrites each page's extractive summary; `--synth` builds one answer
+    from all of them, numbered so the answer can cite its sources (SPEC section 2).
+    Both are opt-in, so both must be able to say "nothing": `summary` takes the
+    fallback it degrades to, and `answer` returns None.
+    """
+
+    def __init__(self, gemini: t.Any) -> None:
+        self.gemini = gemini
+
+    async def summary(self, *, heading: str, text: str, fallback: str) -> str:
+        """The model's summary of the page, or `fallback` when there isn't one.
+
+        `fallback` is the extractive summary the page already had, which is the
+        whole of SPEC section 2's graceful degradation: a model that cannot
+        summarise leaves the result as it was, never emptier.
+        """
+        prompt = _ABSTRACTIVE_PROMPT.format(heading=heading, text=text)
+        return await _generate(self.gemini, lambda: prompt) or fallback
+
+    async def answer(self, *, query: str, sources: t.Sequence[tuple[str, str]]) -> str | None:
+        """One answer across every source, or None when there isn't one.
+
+        Empty `sources` never reaches the model: with nothing fetched there is
+        nothing to answer from, and a model given no sources invents news.
+        """
+        if not sources:
+            return None
+        numbered = "\n".join(
+            f"{position}. {heading} — {summary}"
+            for position, (heading, summary) in enumerate(sources, start=1)
+        )
+        prompt = _ANSWER_PROMPT.format(query=query, sources=numbered)
+        return await _generate(self.gemini, lambda: prompt)

@@ -244,3 +244,38 @@ keeps it, but `pipx --help` and the pipx docs were both denied in this sandbox,
 which means that flag is asserted rather than verified (see DENIED.md). The venv
 `pip install -e .` line sits beside it as the fallback that needs no faith, and the
 README says so.
+
+## D21 — 2026-11-02 · `--llm` summarises where the markdown is, not in the CLI (T4.1)
+
+**Decision**: the abstractive summary is produced inside `Pipeline._summarize`,
+which gained an optional `summarizer` and became `async`, rather than as a
+post-pass in the CLI over the finished `Report`.
+
+**Reason**: SPEC section 2 says the abstractive summary is written from "heading +
+extracted text", but `Result` carries only the finished two-sentence summary. A
+CLI post-pass would therefore be re-summarising the summary — an "abstractive"
+feature that reads a two-sentence extract and rewrites it, which is nearly a
+no-op that still costs a model call per page. The pipeline is the one place that
+still holds `fetched.markdown`, so the seam goes there and the model sees the
+page. The cost is one more optional constructor argument and an `await` in `_one`;
+the benefit is a feature that does what the flag says.
+
+The same applies to `--synth`: it must run *after* the run, because it answers
+from every page, so it is a second `asyncio.run` in `_research` rather than a
+nested loop. Its sources are `(title, summary)` per page the run got content for
+— a failed fetch has no summary to cite, and a source the answer invents from a
+snippet is worse than no source.
+
+Also decided: the two research prompts are inline constants in `synth.py`, not
+files. `prompts/briefing.txt` is a file because the owner is expected to reword a
+spoken greeting; nothing in SPEC section 2 asks for the research prompts to be
+reworded, and two more writable files in the repo is state nobody asked for. If
+that changes, move both to `prompts/` and read them per call the way `load_prompt`
+does.
+
+Finally, `_generate` builds the prompt *inside* its `try`. Refactoring `Speaker`
+to share it initially moved `self.prompt(headlines)` outside the guard, and
+`tests/test_synth.py::test_a_missing_prompt_file_falls_back_without_calling_the_client`
+caught that the greeting then became a `FileNotFoundError`. Building it inside is
+what keeps a lost prompt file degrading to the greeting, as SPEC section 6
+requires.

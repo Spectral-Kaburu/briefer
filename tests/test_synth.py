@@ -1,15 +1,18 @@
-"""Tests for synth.py: the briefing synthesis and its fallback (T5.3).
+"""Tests for synth.py: the briefing synthesis and its fallback (T5.3), and the
+research summaries and answer (T4.1).
 
 SPEC section 6: a Gemini prompt turns the name, yesterday's session summary and
 today's headlines into 2-3 spoken sentences. The network is never touched here:
 `Speaker` depends on the `generate` method, not on the `Gemini` class, so the
 tests hand it any object with `async generate(prompt)` and never construct a key
-(CLAUDE.md: never call the real Gemini in tests).
+(CLAUDE.md: never call the real Gemini in tests). `ResearchSynth` is handed the
+same way.
 
 The fallback matters as much as the synthesis: SPEC section 6 says a briefing
 whose fetching failed entirely gets a plain greeting rather than silence, and a
 model that raises, returns nothing, or returns only whitespace must all degrade
-the same way.
+the same way. SPEC section 2's `--llm` degrades to the extractive summary that is
+already on the result, for the same reason.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ import typing as t
 
 import pytest
 
-from briefing.synth import PLAIN_GREETING, Speaker
+from briefing.synth import PLAIN_GREETING, ResearchSynth, Speaker
 
 # Every test here awaits, so the marker is module-wide rather than 13 copies.
 pytestmark = pytest.mark.asyncio
@@ -211,3 +214,73 @@ async def test_a_missing_prompt_file_falls_back_without_calling_the_client() -> 
         assert client.prompts == []
     finally:
         synth.PROMPT_PATH.write_text(original, encoding="utf-8")
+
+
+# --- research mode (T4.1; SPEC section 2) ------------------------------------
+
+SOURCES = [
+    ("Bank holds the rate", "The central bank left its benchmark rate at 12 percent."),
+    ("Flooding displaces families", "Families in Nairobi moved to higher ground."),
+]
+EXTRACTIVE = "The bank left its rate at 12 percent."
+
+
+async def test_llm_replaces_the_picked_sentences_with_the_models_summary() -> None:
+    """SPEC section 2's `--llm`: an abstractive summary, not a re-picked extractive one."""
+    client = FakeClient("The central bank held its benchmark rate steady at 12 percent.")
+    summary = await ResearchSynth(client).summary(
+        heading="Bank holds the rate", text="The bank left its rate.", fallback=EXTRACTIVE
+    )
+    assert summary == "The central bank held its benchmark rate steady at 12 percent."
+
+
+@pytest.mark.parametrize(
+    ("text", "raises"),
+    [
+        (None, None),
+        ("", None),
+        ("   \n\t ", None),
+        ("never reached", RuntimeError("quota")),
+    ],
+)
+async def test_any_model_failure_keeps_the_extractive_summary(
+    text: str | None, raises: Exception | None
+) -> None:
+    """SPEC section 2: `--llm` is an opt-in, so a model that cannot answer must leave
+    the summary the page already had rather than ending the run."""
+    client = FakeClient(text, raises=raises)
+    summary = await ResearchSynth(client).summary(heading="H", text="Body.", fallback=EXTRACTIVE)
+    assert summary == EXTRACTIVE
+
+
+async def test_the_summary_prompt_carries_the_heading_and_the_page_text() -> None:
+    """What an abstractive summary is written from: the heading, and the page text."""
+    client = FakeClient()
+    await ResearchSynth(client).summary(
+        heading="Bank holds the rate", text="Body sentences here.", fallback=EXTRACTIVE
+    )
+    assert "Bank holds the rate" in client.prompts[0]
+    assert "Body sentences here." in client.prompts[0]
+
+
+async def test_the_answer_prompt_numbers_every_source() -> None:
+    """SPEC section 2: the answer cites source numbers, so the prompt has to number them."""
+    client = FakeClient()
+    await ResearchSynth(client).answer(query="What did the bank do?", sources=SOURCES)
+    prompt = client.prompts[0]
+    assert "What did the bank do?" in prompt
+    for position, (heading, _) in enumerate(SOURCES, start=1):
+        assert f"{position}. {heading}" in prompt
+
+
+async def test_no_answer_is_returned_when_the_model_fails() -> None:
+    """`--synth` is additive: nothing to show means the numbered cards are the answer."""
+    client = FakeClient(raises=RuntimeError("down"))
+    assert await ResearchSynth(client).answer(query="q", sources=SOURCES) is None
+
+
+async def test_nothing_is_summarised_when_there_are_no_sources() -> None:
+    """Nothing fetched means nothing to synthesise, and never a call with nothing."""
+    client = FakeClient()
+    assert await ResearchSynth(client).answer(query="q", sources=[]) is None
+    assert client.prompts == []

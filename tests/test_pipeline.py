@@ -864,3 +864,63 @@ def test_a_degraded_result_carries_the_routers_warning() -> None:
     pipeline = Pipeline(searcher=FakeSearcher(hits=[HIT]), router=router, extractor=FakeExtractor())
     [result] = asyncio.run(pipeline.run("latest flooding")).results
     assert result.warning == "page not found (HTTP 404)"
+
+
+# --- the optional abstractive summarizer (T4.1; SPEC section 2) --------------
+
+
+class FakeSummarizer:
+    """Stands in for `ResearchSynth`: the one signature the pipeline calls."""
+
+    def __init__(self, text: str = "Abstractive summary.", raises: Exception | None = None) -> None:
+        self._text = text
+        self._raises = raises
+        self.seen: list[dict[str, str]] = []
+
+    async def summary(self, *, heading: str, text: str, fallback: str) -> str:
+        self.seen.append({"heading": heading, "text": text, "fallback": fallback})
+        if self._raises is not None:
+            raise self._raises
+        return self._text
+
+
+def test_llm_replaces_the_extractive_summary_with_the_models_one() -> None:
+    """SPEC section 2's `--llm`: the page's summary becomes the model's, in place."""
+    router = FakeRouter({"https://a.example/x": _result("https://a.example/x")})
+    summarizer = FakeSummarizer("The bank raised the rate by fifty basis points.")
+    pipeline = Pipeline(
+        searcher=FakeSearcher(hits=[HIT]),
+        router=router,
+        extractor=FakeExtractor(),
+        summarizer=summarizer,
+    )
+    [result] = asyncio.run(pipeline.run("latest flooding")).results
+    assert result.summary == "The bank raised the rate by fifty basis points."
+
+
+def test_the_summarizer_gets_the_page_it_summarised() -> None:
+    """An abstractive summary is written from the page, not from its old summary."""
+    router = FakeRouter({"https://a.example/x": _result("https://a.example/x", markdown="PAGE")})
+    summarizer = FakeSummarizer()
+    pipeline = Pipeline(
+        searcher=FakeSearcher(hits=[HIT]),
+        router=router,
+        extractor=FakeExtractor(),
+        summarizer=summarizer,
+    )
+    asyncio.run(pipeline.run("latest flooding"))
+    assert summarizer.seen[0]["text"] == "PAGE"
+
+
+def test_a_page_with_no_content_is_never_summarised() -> None:
+    """A snippet-only page has no body: `--llm` has nothing to rewrite it from."""
+    router = FakeRouter()  # no answer: SNIPPET, so no markdown to summarise
+    summarizer = FakeSummarizer()
+    pipeline = Pipeline(
+        searcher=FakeSearcher(hits=[HIT]),
+        router=router,
+        extractor=FakeExtractor(),
+        summarizer=summarizer,
+    )
+    asyncio.run(pipeline.run("latest flooding"))
+    assert summarizer.seen == []
