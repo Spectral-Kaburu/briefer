@@ -619,10 +619,26 @@ def test_whitelist_prune_keeps_verified_entries(tmp_path: t.Any, monkeypatch: t.
 # --- status (T3.4) ---------------------------------------------------------
 
 
+class _UnreachableFirecrawl:
+    """`_local_firecrawl`'s stand-in: reports the local instance as down.
+
+    `status` used to reach the real socket here, so these six tests only ever
+    passed on a machine with Docker up (T8.1). The URL still comes from config
+    either way, so the "names the local URL" assertion stays a real assertion.
+    """
+
+    def __init__(self, *args: t.Any, **kwargs: t.Any) -> None:
+        pass
+
+    async def health(self) -> bool:
+        return False
+
+
 def _status_env(monkeypatch: t.Any, tmp_path: t.Any) -> None:
     """An isolated state dir, with the network probes stubbed out."""
     monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
     monkeypatch.setattr(cli_module, "_ddgs_reachable", lambda: True)
+    monkeypatch.setattr(cli_module, "_local_firecrawl", _UnreachableFirecrawl)
 
 
 def test_status_reports_every_check_spec_section_3_names(

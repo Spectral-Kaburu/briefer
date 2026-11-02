@@ -279,3 +279,94 @@ to share it initially moved `self.prompt(headlines)` outside the guard, and
 caught that the greeting then became a `FileNotFoundError`. Building it inside is
 what keeps a lost prompt file degrading to the greeting, as SPEC section 6
 requires.
+
+## D22 — 2026-11-02 · the backup search adapter raises; its caller guards (T2.2a)
+
+`LocalFirecrawl`'s existing contract is "no method raises on a fetch failure,
+so one bad URL can never kill a run" — and `search` breaks it.
+
+**Decision**: `search()` propagates a transport error; it does not return an
+empty list, a sentinel, or a classified result object.
+
+**Reason**: the broad `try/except` already exists in `Searcher._backup_search`
+(search.py), is documented as "a failed backup is still not fatal", and is
+covered by a test that injects a raising backup. Swallowing the error inside
+`search()` would make it a *second*, independent copy of that policy — the exact
+duplication D15 removed from the config-error path, where four copies of a guard
+produced a gap. One guard, in the caller that owns the failure mode.
+
+The consequence is a real asymmetry worth knowing: a scrape failure never
+reaches the router as an exception, because a scrape failure is a *classify*
+input (SPEC §4's whole table), while a search failure is a *fallback* outcome
+(SPEC §5) with nothing to classify it as. Different callers want different
+things from the same client, and the client cannot serve both from one shape.
+
+Cost: `_backup_search`'s broad `except` is load-bearing rather than lazy, so it
+must not be tightened without giving `search` a real failure channel. Recorded
+there and in `search.py`.
+
+Related: the adapter returns *raw item dicts* rather than `SearchResult`s, so
+`from_search` stays the single place the `/v2/search` field mapping lives —
+otherwise the mapping would exist twice and drift, which is the failure mode D21
+moved the summarizer to avoid.
+
+## D23 — 2026-11-03 · the guard installs unless `_is_live` says otherwise, and its own escape hatch is tested (T8.1)
+
+The first cut of `tests/conftest.py` installed the guard for **every** test while
+its docstring promised live-marked tests were exempt. The 4 `test_live.py` tests
+then failed under `make live` with `RealSideEffectBlocked`.
+
+**Decision**: the fixture consults `_is_live(request)` before installing, and
+`test_the_guard_really_lets_the_live_marker_through` asserts the fixture's own
+source contains that call.
+
+**Reason**: an escape hatch nobody exercises is an escape hatch nobody tests. The
+unit test for `_is_live` alone passes against a fixture that never calls it — so
+that test was exactly the "fake that returns the shape the consumer wants" trap
+from T2.2, one layer up. The source assertion is unusual, and it is warranted
+here: the bug class is a guard drifting away from its own documentation, and no
+behavioural test can catch it because the failure only appears in the one command
+(`make live`) CI never runs.
+
+**Cost / why not something else**: a behavioural test would need a real live test
+to assert against, which means a real network call in the ordinary suite — what
+the guard exists to prevent. An alternative was to invert the fixture so it
+installs only for guarded tests and mark `test_live.py` explicitly; that keeps
+the escape hatch implicit and loses the assertion above.
+
+**Amended after review (2026-11-03): layer 2 was defeatable and is now not.**
+`blocked` is an importable module global, so a test that caught the block could
+`blocked.clear()` on its way past and teardown saw an empty list — proven with a
+throwaway test that connected a real socket and passed. The record is now backed
+by `_count` (`conftest.py`), which only `_block` increments and no test can reset,
+so `_blocked_now()` is true whether or not the list survives. A test that blocks
+on purpose (`test_isolation.py`) clears both through `_reset_blocks()`.
+
+Related and worth recording: **`socket.socketpair` is deliberately not blocked.**
+Blocking it broke every async test, because the Unix event loop calls it in
+`_close_self_pipe_socket` on close and a socketpair is a loop-local pipe that
+never reaches the network. The lesson is that "reach the network" and "use a
+socket" are not the same predicate, and a guard that patches the broader one
+fails the loop's own bookkeeping.
+
+## D24 — 2026-11-03 · `test_run.py` patches `_SPEAKER` in one autouse fixture, not at each `_STATE_DIR` site (T8.1)
+
+`_speaker` builds a real `Gemini()`, and the google-genai SDK resolves a host when
+it constructs its client, so an unpatched seam reached the network from 7 tests in
+that file.
+
+**Decision**: one autouse `_fake_speaker` fixture patches `_SPEAKER` for the whole
+file, instead of adding a line beside each of the 15 `_STATE_DIR` patches.
+
+**Reason**: the per-site version was tried first and it broke 5 tests that build
+their own `FakeSpeaker` and assert on `speaker.calls` — the added line came *after*
+theirs and silently overrode it. Two of those five assert `speaker.calls == []`,
+which made the clobbered tests pass while asserting nothing at all. An autouse
+fixture runs before the test body, so a test's own `monkeypatch.setattr` still
+wins and both kinds of test keep their meaning; and the ordering guarantee is
+visible rather than incidental.
+
+**Cost**: every test in the file now gets a fake speaker whether it wanted one or
+not, so a future test that *should* assert the speaker was never built has to
+overwrite the fixture to restore the real thing — and there is currently no test
+that does, which is worth knowing before relying on it.

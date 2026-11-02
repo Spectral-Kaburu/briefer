@@ -163,9 +163,11 @@ class Pipeline:
         """Search, fetch, and extract. One bad URL never ends the run."""
         started = time.monotonic()
         mode = _mode(query)
-        hits: list[SearchResult] = []
         try:
-            hits = [SearchResult.from_ddgs(hit, mode) for hit in await self.searcher.search(query)]
+            # `Searcher` already normalizes; its hits are `SearchResult`s, not raw
+            # engine dicts. Re-normalizing here raised `AttributeError` on the
+            # NamedTuple and the broad `except` hid it as an empty search.
+            hits: list[SearchResult] = list(await self.searcher.search(query))
         except Exception:  # noqa: BLE001 - a failed search is a valid, empty outcome
             hits = []
 

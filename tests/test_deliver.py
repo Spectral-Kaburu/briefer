@@ -12,6 +12,7 @@ exactly rather than by substring.
 
 from __future__ import annotations
 
+import asyncio
 import typing as t
 
 import pytest
@@ -131,20 +132,73 @@ async def test_a_dry_run_cannot_fail_the_run() -> None:
 
 # --- the real runner ------------------------------------------------------
 #
-# These are the only tests here that spawn a process, and neither of them
-# spawns `voice-tts`: one runs a binary that cannot exist, the other runs the
-# interpreter on an inline `-c`. The argv under test is the seam's contract.
+# These two are the seam-contract tests, and they do not spawn anything
+# (T8.1's guard). `SubprocessRunner.run` is two lines: spread argv into
+# `create_subprocess_exec`, then report the child's exit status. The seam *is*
+# that spawn call, so patching it is not a weaker test — it is the only way to
+# test the runner without a real process, and it pins the two things a fake
+# runner cannot prove: that the argv is spread rather than passed as a list,
+# and that a missing binary escapes instead of becoming a status.
 
 
-async def test_the_real_runner_reports_a_status() -> None:
-    """`deliver` needs a status to decide success, and the status must be real."""
-    import sys
+class FakeProcess:
+    """A child process that never ran.
 
-    status = await SubprocessRunner().run([sys.executable, "-c", "raise SystemExit(7)"])
+    `create_subprocess_exec` either returns a process or raises — a binary
+    missing from PATH raises there, not from `.wait()` — so `raises` is spent at
+    spawn time to match reality.
+    """
+
+    def __init__(self, status: int = 0, raises: Exception | None = None) -> None:
+        self.status = status
+        self.raises = raises
+        self.waited = False
+
+    async def wait(self) -> int:
+        self.waited = True
+        return self.status
+
+
+def _patch_spawn(
+    monkeypatch: pytest.MonkeyPatch,
+    process: FakeProcess,
+    seen: list[list[str]],
+) -> None:
+    """Stand in for `asyncio.create_subprocess_exec`, recording the argv."""
+
+    async def spawn(*argv: str) -> FakeProcess:
+        seen.append(list(argv))
+        if process.raises is not None:
+            raise process.raises
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+
+
+async def test_the_real_runner_reports_a_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`deliver` needs a status to decide success, and it must be the child's."""
+    seen: list[list[str]] = []
+    process = FakeProcess(status=7)
+    _patch_spawn(monkeypatch, process, seen)
+
+    argv = [COMMAND, "-s", "aether", "-p", "high", "Good morning."]
+    status = await SubprocessRunner().run(argv)
+
     assert status == 7
+    assert process.waited, "the status must come from waiting on the child"
+    # Spread, not a list: `create_subprocess_exec([...])` would run a program
+    # literally named the whole argv, and no audio would ever be produced.
+    assert seen == [argv]
 
 
-async def test_the_real_runner_lets_a_missing_binary_raise() -> None:
+async def test_the_real_runner_lets_a_missing_binary_raise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """`FileNotFoundError` must escape, or the missing-binary error cannot happen."""
+    seen: list[list[str]] = []
+    _patch_spawn(monkeypatch, FakeProcess(raises=FileNotFoundError(COMMAND)), seen)
+
     with pytest.raises(FileNotFoundError):
         await SubprocessRunner().run([f"{COMMAND}-definitely-not-installed"])

@@ -20,6 +20,7 @@ from rich.text import Text
 
 from briefing.fetch.router import ErrorClass, Method
 from briefing.pipeline import Event, Report, Result
+from briefing.search import SearchResult
 from briefing.ui import UI, badge, card, footer, header
 
 # A recorded console is non-terminal, so `plain` auto-detects to True; every test
@@ -100,8 +101,18 @@ def test_a_failed_fetch_degrades_to_the_snippet_not_to_failed() -> None:
             return FetchResult(method=Method.SNIPPET, ok=False, snippet=snippet)
 
     class OneHit:
-        async def search(self, query: str):
-            return [{"title": "Gone", "url": "https://gone.example/x", "body": "a snippet"}]
+        """One snippet-only hit. A real `Searcher` returns normalized
+        `SearchResult`s, not engine dicts, so this must too."""
+
+        async def search(self, query: str) -> list[SearchResult]:
+            return [
+                SearchResult(
+                    title="Gone",
+                    url="https://gone.example/x",
+                    snippet="a snippet",
+                    origin="text",
+                )
+            ]
 
     report = asyncio.run(
         Pipeline(

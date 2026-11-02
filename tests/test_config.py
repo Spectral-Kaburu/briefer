@@ -138,6 +138,10 @@ def test_shipped_example_config_loads() -> None:
     """The example file a user is told to copy must validate against the schema."""
     example = Path(__file__).resolve().parent.parent / "config" / "briefing.yaml.example"
     cfg = load_config(example, state_dir=Path("/tmp/briefing-test-state"))
-    assert cfg.news_topics == ["technology", "world news"]
+    # The topics are the owner's own sample list, so only assert the shape they
+    # arrive in: re-listing them here broke on every edit to the example.
+    assert isinstance(cfg.news_topics, list)
+    assert cfg.news_topics
+    assert all(isinstance(topic, str) for topic in cfg.news_topics)
     assert cfg.firecrawl.local.base_url == "http://localhost:3002"
     assert cfg.firecrawl.api.key_env == "FIRECRAWL_API_KEY"

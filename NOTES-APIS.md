@@ -80,11 +80,21 @@ So the two suspects are settled, and neither changes shipped behaviour:
    item dicts to `from_search`. `Searcher._backup_search` already normalizes a
    *list of item dicts*, so the unwrapping belongs in the concrete backup adapter.
 
-**Gap found, worth flagging:** T2.2 shipped the fallback *routing* and the
-*normalization* but no concrete adapter that actually POSTs to `/v2/search`, so
-`Searcher(backup=...)` currently has nothing real to be given in production. This
-is a T2.2 wiring gap, not a T2.3 blocker — the live test asserts the adapter-side
-shape so whoever writes it gets caught if they assume a flat `data` list.
+**Gap found, worth flagging (T2.2, now closed by T2.2a — 2026-11-02):** T2.2
+shipped the fallback *routing* and the *normalization* but no concrete adapter
+that actually POSTs to `/v2/search`, so `Searcher(backup=...)` currently has
+nothing real to be given in production. This was a T2.2 wiring gap, not a T2.3
+blocker — the live test asserts the adapter-side shape so whoever writes it gets
+caught if they assume a flat `data` list.
+
+**Closed:** `LocalFirecrawl.search(query, limit)` is that adapter (`fetch/local.py`),
+wired at `cli._searcher`. `sources` is always `["web"]`; it unwraps `data["web"]`
+and returns raw item dicts, leaving the field mapping to `SearchResult.from_search`.
+Unlike `scrape` and `health`, it *raises* on a dead instance — `Searcher._backup_search`
+is the single caller that must never fail and already guards it (see D22).
+Note that PLAN.md T8.2 revisits this same adapter and asks for more of it (a
+`mode` argument, never-raise-with-DEBUG-logging, a CLI-level wiring test, and a
+live test); treat T2.2a as the first cut, not the final shape.
 
 ## 3. Firecrawl — error codes
 

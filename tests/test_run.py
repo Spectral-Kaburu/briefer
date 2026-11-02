@@ -18,6 +18,7 @@ import typing as t
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 import briefing.cli as cli_module
@@ -68,6 +69,19 @@ class FakeAudio:
 
     async def speaking(self) -> bool:
         return self.speaking_flag
+
+
+@pytest.fixture(autouse=True)
+def _fake_speaker(monkeypatch: pytest.MonkeyPatch) -> t.Iterator[None]:
+    """T8.1: default every test here to a fake speaker.
+
+    `_speaker` builds a real `Gemini()`, and the google-genai SDK resolves a host
+    when it constructs its client — so an unpatched seam reached the network from
+    six tests. A test that needs its *own* speaker still wins: autouse fixtures
+    run before the test body, so its own `monkeypatch.setattr` overrides this.
+    """
+    monkeypatch.setattr(cli_module, "_SPEAKER", lambda *a, **k: FakeSpeaker())
+    yield
 
 
 def _write_config(tmp_path: Path, topics: list[str], **extra: t.Any) -> Path:

@@ -1003,5 +1003,302 @@ should not hand-roll a skill or an MCP server without the skill that knows the
 conventions. `Bash(ls ~/.claude/skills)` was also denied (outside the project), so
 this is a negative reading from the session listings rather than a directory check.
 
+---
+
+## Session 4 — 2026-11-02 · post-closeout review fixes
+
+### T2.2a ✔ — the local-Firecrawl `/v2/search` backup adapter now exists
+
+**The defect.** T2.2 built the *routing* for the backup search and left a note
+saying "T2.2 shipped the fallback routing and normalization but no concrete
+adapter that actually POSTs to `/v2/search`, so `Searcher(backup=...)` has nothing
+real to be given in production." That gap survived to closeout, and the shape it
+left behind was worse than "not wired": `cli._searcher` *did* pass a backup — a
+real `LocalFirecrawl` — and `LocalFirecrawl` had no `search` method at all. So
+when ddgs rate-limited, `Searcher._backup_search` called `self.backup.search(...)`,
+caught the resulting `AttributeError` in its broad `except`, and returned `[]`.
+A rate-limited search came back with **zero results and no message** — the same
+output as "ddgs found nothing", so the user had no way to tell a fallback was
+even attempted.
+
+Not named T2.2b: it is the adapter T2.2's own note deferred, not new scope.
+
+**Why the tests never caught it.** Every backup test in `tests/test_search.py`
+injected `FakeFirecrawlSearch`, a stub *shaped* like `LocalFirecrawl` should be.
+`cli._searcher` passed the real class, and no test drove the two together. This
+is the T3.1 lesson recurring verbatim — "when a component's job is to *wire*
+other components, at least one test must use the real ones" — and it is the third
+time in this project a fake made a wiring look finished.
+
+**The fix.** `LocalFirecrawl.search(query, limit)` POSTs to `/v2/search` with
+`sources: ["web"]` and unwraps `data["web"]`, which is exactly the unwrapping
+`NOTES-APIS.md` §3 said any adapter over this endpoint must do. It returns raw
+item dicts; `SearchResult.from_search` still owns the field mapping, so the two
+responsibilities stayed separate. Unlike `scrape`, a dead local instance
+*raises* — `Searcher._backup_search` is the caller that must never fail and
+already guards it, and a search with a failed ddgs has no worse state left to
+degrade to.
+
+**Tests.** TDD, RED verified first: six tests failed with
+`AttributeError: 'LocalFirecrawl' object has no attribute 'search'`, and the new
+wiring test failed on exactly the production symptom (`[] == [...]`). Five unit
+tests over the adapter in `test_local.py` (unwrap, request body, missing `web`
+key, wrongly-typed `web`, transport failure) and one wiring test in
+`test_search.py` that drives the **real** `LocalFirecrawl` through the **real**
+`Searcher` with ddgs raising `RatelimitException`.
+
+**Sabotage-proven.** Flipping `_SEARCH_PATH` to `/v2/scrape` fails all six; the
+constant was restored with the `Edit` tool and the file re-verified green. The
+sabotage check is what proves the wiring test bites, not merely passes.
+
+**Verified against real services too**, not only mocks: with a fake ddgs raising
+`RatelimitException`, the production path (`LocalFirecrawl` real, local Firecrawl
+up) returned five normalized `SearchResult`s with `origin="search"` — Tuko,
+Kenyans.co.ke, Nation, the Star — where the pre-fix run returned `[]`. This
+confirms issue 1's probe facts end-to-end: results sit under `data.web` and carry
+no date, so backup hits still sort last by design.
+
+`make check` green: **556 passed, 4 skipped**, ruff clean both ways.
+
+One thing this does *not* fix, and it is worth saying plainly: `region` defaults
+to `us-en` (config.py) with `ke-en` still unverified, and nothing auto-loads a
+config file (D16), so `briefing -r "<kenya query>"` runs with a US search bias
+unless `--config` is passed. My live run above used the default `us-en` region,
+so it does not speak to `ke-en` either way. That is still an open SPEC §9
+question for the owner, not a defect this task closed.
+
+### T2.2b ✔ — the pipeline was discarding every search result
+
+**The bug, found by the `reviewer` subagent while reviewing T2.2a, and it is a
+bigger one than the task it was reviewing.**
+
+`Pipeline.run` (pipeline.py) did:
+
+    hits = [SearchResult.from_ddgs(hit, mode) for hit in await self.searcher.search(query)]
+
+But `Searcher.search` has returned *already-normalized* `SearchResult` NamedTuples
+since T2.1. Calling `from_ddgs` on a NamedTuple raised
+`AttributeError: 'SearchResult' object has no attribute 'get'`, and the
+surrounding `except Exception` swallowed it into `hits = []`.
+
+**Consequence: every `briefing -r "<query>"` and every `briefing run` returned
+zero results.** Not degraded results — an empty run. The search worked, the
+router worked, the extractor worked, and the pipeline threw the output away
+before any of it was reached. With my T2.2a fix below/above now restoring the
+backup, the results were still going nowhere, so this had to be fixed for T2.2a
+to be worth anything.
+
+**Why no test caught it, for the third time in this project.** Every pipeline
+test injects `FakeSearcher`, which returns raw `dict` *hits* — the shape
+`from_ddgs` expects. The real `Searcher` returns NamedTuples. So the fake and
+production disagreed in exactly the one way that mattered, and the fake was
+wrong: it made the pipeline's re-normalization *look* correct. T3.1's lesson —
+"when a component's job is to *wire* other components, at least one test must
+use the real ones" — recurring a third time, in the same file.
+
+**The fix** is one line (pipeline.py): consume the searcher's normalized output
+directly. `FakeSearcher` and `Slowish` in `test_pipeline.py` were then wrong
+rather than merely different, and were corrected to normalize their raw dicts
+through `from_ddgs` the way the real `Searcher` does — so the fake now matches
+the real contract's *type*, not just its shape. `tests/test_ui.py`'s inline
+`OneHit` fake had the same defect and was fixed the same way. Grepping for
+`async def search` across `tests/` confirmed nothing else was left.
+
+**TDD'd.** RED first: the new test
+`test_a_real_searchers_hits_reach_the_pipeline` failed `assert 0 >= 1, "the
+pipeline dropped every hit it was given"` — the production symptom exactly.
+Sabotage-proven: restoring the buggy one-liner fails **8** pipeline tests,
+including all four SPEC §4 real-router acceptance tests. Restored, re-verified
+green.
+
+`make check` green: **557 passed, 4 skipped**, ruff clean both ways.
+
+**Worth knowing, because it generalizes:** a fake that returns the *shape* the
+consumer expects is not a fake of that producer. `FakeSearcher` took raw dicts
+because that was convenient at 50 call sites, and it happened to be the shape
+`from_ddgs` reads — so it was a faithful fake of a `Searcher` that never
+existed. The tell is that the bug was in a line *between* two components that
+were each tested correctly, which is where a wiring test is the only thing that
+sees.
+
+---
+
+## Phase 8 audit (T8.0)
+
+Answers with file:line evidence, as PLAN.md requires. Phase 8 was added to PLAN.md
+by the owner while this session was already fixing T2.2a/T2.2b — so the audit is
+written after the fact and records what the *pre-fix* tree answered, marked where
+the fix has since changed the answer.
+
+**(a) Does the `_search`/`_searcher` factory pass a real backup adapter?** — **It
+passes one that cannot work.** `cli.py:561` `_searcher(loaded, mode)` → `cli.py:567`
+`backup=_local_firecrawl(loaded)`, a genuine `LocalFirecrawl`. But `LocalFirecrawl`
+(`fetch/local.py`) exposed only `scrape()` and `health()` — **no `search()`** — so
+`Searcher._backup_search` (`search.py:213`) called `self.backup.search(...)` on an
+object with no such method. **Answer: NO.** Now **YES**, via T2.2a above, but note
+T8.2 asks for a *different and larger* adapter than the one T2.2a added (a `mode`
+argument, never-raise-with-DEBUG-logging rather than raising, a CLI-level wiring
+test, and a live test), so **T8.2 is still needed** — see the conflict note below.
+
+**(b) Default `search.region` and auto-loaded config?** — Two separate answers:
+
+- **Default region is `us-en`** — `config.py:34` (`region: str = "us-en"`).
+  `ke-en` is still UNVERIFIED: `NOTES-APIS.md` records that `ddgs` passes `region`
+  through unvalidated, so `ke-en` will not error even if it does nothing. This is
+  the SPEC §2 headline use case (`briefing -r "…kenya"`) running with a US bias.
+- **No config file is ever loaded unless `--config` is given.** `load_config(None)`
+  returns pure defaults (D15/D16). So a `config.yaml` a user writes is *inert*
+  unless it is passed explicitly every time. **Answer: NO.**
+
+**(c) Where does the briefing greeting name come from?** — `config.py:92`
+(`name: str = "Aether"` under the `briefing` config section), consumed in **two**
+places, and this is worse than the PLAN question assumed:
+
+1. `synth.py:26` `PLAIN_GREETING = "Good morning, {name}."` + `synth.py:43`
+   `_greeting(name)` → the spoken fallback greeting names **Aether**. Aether is
+   the *assistant*, so the default greeting names the assistant and not the
+   user — confirmed by running it: `_greeting("Aether")` == `"Good morning,
+   Aether."`
+2. `prompts/briefing.txt` opens **"You are {name}, a personal morning briefer…"**
+   — so the same `config.name` is also the identity the synthesis prompt tells
+   the model to adopt, and it also says "Refer to the person by name once, at the
+   start", which the prompt has no way to do because it has only the one `{name}`.
+
+So `config.name` is doing double duty as both the *speaker's* name and the
+*listener's* name, defaulting to the speaker. Verified by running the loader:
+`load_config(None).briefing.name` == `"Aether"`, and an empty name degrades to a
+greeting of literally `"Good morning, ."` (`synth.py:26` documents that as the
+known cost). T8.5 adds `user_name` for the listener, which fixes both.
+**Answer: `config.briefing.name`, default "Aether" — the assistant's own name,
+used for both parties. The prompt file DOES exist (`prompts/briefing.txt`); it is
+the greeting string in `synth.py` that is the duplication.**
+
+**(d) Tests reaching a real subprocess / socket / HTTP call without a mock** —
+`src/briefing/deliver.py:114` (`asyncio.create_subprocess_exec`) is the only real
+spawn point and it is behind the injected `_RUNNER` seam. No test file contains a
+literal `subprocess.`/`socket.`/`os.system` call. `tests/conftest.py` does **not**
+exist, so nothing guards the *indirect* paths (a test that forgets to patch
+`_RUNNER`, or that builds a real `LocalFirecrawl`/`DDGS`/`Gemini` without
+`respx`). Enumerated (read-only audit, 2026-11-02) — **8 tests reach a real side
+effect on a plain `pytest` run**, and here they are:
+
+**Real subprocess (2):**
+- `test_deliver.py:139` `test_the_real_runner_reports_a_status` — spawns a real
+  `sys.executable -c` process. **Intentional**: it tests the seam's contract, and
+  the binary is the interpreter, not `voice-tts`.
+- `test_deliver.py:147` `test_the_real_runner_lets_a_missing_binary_raise` —
+  attempts a real spawn of a nonexistent binary to prove `FileNotFoundError`
+  handling. **Intentional.**
+- All 15 `tests/test_run.py` tests do patch `_RUNNER` with a `FakeRunner`, and
+  `_briefing` (`cli.py:498-501`) refuses before reaching `cli.py:515`, so the
+  gate class (193/220/237/275/343) is currently safe *only because of the patch*.
+  Remove it and break the gate and the real runner runs — the T5.4 incident's
+  exact shape. That is what T8.1 is for.
+
+**Real socket (6, all `localhost:3002`, all through `status`):** `test_cli.py`
+lines 628, 641, 651, 662, 674, 691. `_status_env` patches `_ddgs_reachable` but
+**not** `_local_firecrawl`, so `status()` → `cli.py:307` →
+`LocalFirecrawl.health()` → a real unmocked `GET http://localhost:3002/`
+(`fetch/local.py:124`). A `ConnectError` is swallowed into `local_ok=False`, so
+these six tests have been passing while opening a real TCP socket every run —
+harmless today (local Firecrawl is up), but exactly the "indirect reach" T8.1's
+guard exists to make impossible.
+
+**Gated correctly:** all 4 `tests/test_live.py` tests (`test_live.py:36,49,61,78`)
+are `@pytest.mark.live` + `skipif not BRIEFING_LIVE`, so a plain run skips them.
+
+**Answer: 8 tests reach a real subprocess or socket on a plain `pytest` run; two
+are intentional seam-contract tests, six are accidental localhost sockets through
+`status`.** T8.1 is **needed** and currently absent.
+
+**Conflict to record before T8.2 is implemented.** T2.2a added `LocalFirecrawl.search()`
+and wired it at `cli._searcher`. PLAN.md T8.2 asks for a *separate* `FirecrawlSearch`
+class with `search(query, limit, mode)` that **never raises** (logs DEBUG and
+returns `[]` on connect errors, timeouts, non-2xx, bad JSON and bad shapes), plus a
+`mode` argument the current adapter lacks, plus a CLI-level wiring test and a live
+test. These are different designs for the same endpoint, and T8.2's is the owner's.
+So T2.2a's shape is a **first cut to be superseded by T8.2**, not a case of the work
+being done twice — and the two should not be merged without deciding which raises.
+The NOTES-APIS.md gap paragraph now says exactly this.
+
+## T8.1 — 2026-11-03 · test isolation guard
+
+`tests/conftest.py` (new): an autouse `_guard` fixture replacing
+`subprocess.run/Popen/call/check_call/check_output`, `os.system`,
+`asyncio.create_subprocess_exec/shell`, `socket.socket.connect/connect_ex`,
+`socket.create_connection` and `socket.getaddrinfo`, for every test not marked
+`live`. Two layers, because T5.3 showed a broad `except` hiding a real failure:
+`RealSideEffectBlocked` derives from `BaseException`, and every attempt is
+recorded in `blocked` so the teardown fails the test even if it was caught.
+`tests/test_isolation.py` (new): 10 tests covering the block itself, both layers,
+and the live escape hatch.
+
+**13 tests had their seams patched. No exemptions were added.**
+
+| Where | Tests | Seam added |
+|---|---|---|
+| `tests/test_deliver.py` | `test_the_real_runner_reports_a_status`, `test_the_real_runner_lets_a_missing_binary_raise` | `asyncio.create_subprocess_exec` — the runner's only seam — with a `FakeProcess` |
+| `tests/test_cli.py` | all 6 `status` tests | `_local_firecrawl`, inside the shared `_status_env` helper |
+| `tests/test_run.py` | 7 tests that reach the speaker | `_SPEAKER`, via one autouse `_fake_speaker` fixture |
+
+(The `_fake_speaker` fixture patches `_SPEAKER` for all 15 tests in the file, not
+just the 7 that reach it — the other 8 never synthesise. The count above is tests
+that *needed* a new patch, not tests the patch touches.)
+Three things worth carrying forward:
+
+1. **`tests/test_run.py` came within one edit of a vacuous test.** Patching
+   `_SPEAKER` at all 15 `_STATE_DIR` sites silently clobbered the 5 tests that
+   build their own `FakeSpeaker` and assert on `speaker.calls`. Two of those
+   assert `speaker.calls == []`, so the clobber turned them into passes that
+   assert nothing. Fixed by moving the patch into a single autouse fixture: a
+   test's own `monkeypatch.setattr` runs in the body and still wins, so both
+   kinds of test keep their meaning.
+2. **`make live` found a defect in the guard itself.** The fixture installed
+   unconditionally while its docstring promised `live` tests were exempt, so all
+   4 `test_live.py` tests failed with `RealSideEffectBlocked`. That is the T2.2
+   lesson a third time — the docstring described behaviour the code did not have
+   — and only running `make live` caught it. Fixed by calling `_is_live(request)`
+   and pinned by `test_the_guard_really_lets_the_live_marker_through`, which
+   asserts on the fixture's own source, so a guard that stops consulting its own
+   escape hatch now fails loudly instead of quietly passing.
+3. **`tests/test_config.py::test_shipped_example_config_loads` was already
+   failing** before this task, on an edit to `config/briefing.yaml.example` that
+   added two topics to `news_topics` while the test hard-coded the old list. Not
+   a T8.1 test, but T8.1's acceptance (iv) demanded a green suite, so it is fixed
+   here: the test asserts the *shape* the topics arrive in, not the owner's
+   sample values, so the next edit to the example cannot break it.
+
+Corrected from the T8.0 audit: the 6 `test_cli.py` status tests sit at 644, 657,
+667, 678, 690 and 707, with `_status_env` at 637 — the one place all six pass
+through, which is why one patch there fixed all six.
+
+## T8.1 review follow-ups (D23 extended)
+
+The `reviewer` subagent found four defects in the first cut. All four were real;
+the second one was a working bypass.
+
+1. **Layer 2 was defeatable.** `blocked` is an importable module global, so a test
+   that caught the block could `blocked.clear()` on its way past and teardown saw
+   an empty list. Proven with a throwaway test that did exactly that, connected a
+   real socket, and **passed**. Fixed with `_count` (`conftest.py:34-44`), a counter
+   `_block` increments and no test can reset, checked at teardown through
+   `_blocked_now()`. A test that blocks on purpose clears both via the new
+   `_reset_blocks()`. Pinned by `test_a_cleared_record_still_fails_the_test`.
+2. **Unblocked vectors were missing.** `os.exec*`, `os.spawn*`, `os.posix_spawn`,
+   `multiprocessing.Process.start`, `pty.spawn`, `socket.gethostbyname(_ex)`,
+   `socket.getnameinfo` and `asyncio.open_connection` were not intercepted. All
+   added.
+3. **`socket.socketpair` had to be left out.** Blocking it broke *every* async
+   test: the Unix event loop calls `socketpair` in `_close_self_pipe_socket` on
+   loop close, and a socketpair is a loop-local pipe that never reaches the
+   network. Noted in a comment in `_PATCHES` so it does not get "fixed" later.
+4. **`from subprocess import run` bypasses the guard**, because attribute patching
+   cannot see a pre-bound reference. Unfixable in this design, so it is documented
+   rather than patched around — and no test file currently does it.
+
+Also corrected here: the `status` line numbers above, and the "13 tests" count,
+which the reviewer showed contradicted its own table (2 + 6 + 7 = 15 rows, because
+`_fake_speaker` patches the whole file).
+
 
 

@@ -13,8 +13,10 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
+import respx
 from ddgs.exceptions import RatelimitException, TimeoutException
 
+from briefing.fetch.local import LocalFirecrawl
 from briefing.search import (
     _NO_DATE,
     Searcher,
@@ -371,6 +373,7 @@ def test_other_errors_propagate_as_a_search_failure() -> None:
 # --- backup search via local Firecrawl /search (T2.2) ----------------------
 
 # A /v2/search web item, per NOTES-APIS.md: url, title, description, category.
+BASE = "http://localhost:3002"
 SEARCH_HIT: dict[str, t.Any] = {
     "url": "https://example.com/e",
     "title": "Bank raises lending rate",
@@ -481,3 +484,34 @@ def test_plain_query_falls_back_too() -> None:
     results = asyncio.run(searcher.search("how does a lending rate work"))
     assert [r.origin for r in results] == ["search"]
     assert backup.calls[0]["query"] == "how does a lending rate work"
+
+
+@respx.mock
+def test_a_rate_limited_ddgs_is_really_rescued_by_local_firecrawl() -> None:
+    """The T2.2 gap as a wiring test, not a shape test.
+
+    Every test above injects `FakeFirecrawlSearch`, which is shaped the way
+    `cli._searcher` passes its backup. Production passes a real
+    `LocalFirecrawl`, which for a while had no `search` method at all — so
+    `_backup_search`'s broad `except` ate the `AttributeError` and a
+    rate-limited run returned zero results with nothing to say why. This test
+    drives the real class through the real `Searcher`, so losing the adapter
+    fails here instead of silently in production.
+    """
+    respx.post(f"{BASE}/v2/search").mock(
+        return_value=httpx.Response(200, json={"success": True, "data": {"web": [SEARCH_HIT]}})
+    )
+    searcher = Searcher(
+        ddgs_factory=lambda: FakeDDGS(news_raises=RatelimitException("429 too many")),
+        region="ke-en",
+        max_results=5,
+        backup=LocalFirecrawl(base_url=BASE),
+        backoff_s=0,
+    )
+
+    results = asyncio.run(searcher.search("latest flooding in kenya"))
+
+    assert [r.title for r in results] == [SEARCH_HIT["title"]]
+    assert [r.url for r in results] == [SEARCH_HIT["url"]]
+    assert results[0].snippet == SEARCH_HIT["description"]
+    assert results[0].origin == "search"

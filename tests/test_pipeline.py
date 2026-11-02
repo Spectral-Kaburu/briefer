@@ -14,6 +14,7 @@ from pathlib import Path
 
 import httpx
 import respx
+from ddgs.exceptions import RatelimitException
 
 from briefing.fetch.api import ApiFirecrawl
 from briefing.fetch.local import LocalFirecrawl
@@ -26,6 +27,7 @@ from briefing.pipeline import (
     Progress,
     Report,
 )
+from briefing.search import Searcher, SearchResult, detect_mode
 from briefing.whitelist import Whitelist
 
 # One fake search hit: the fields `Searcher` normalizes.
@@ -41,8 +43,35 @@ _API_MARKDOWN = (
 )
 
 
+class FakeDDGS:
+    """Stands in for `ddgs.DDGS`: rate-limited on every call, as in the field.
+
+    A ddgs that always fails is the case the local-Firecrawl backup exists for,
+    and it is the only way a search reaches the backup at all.
+    """
+
+    def __enter__(self) -> t.Self:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        return None
+
+    def news(self, query: str, **kwargs: t.Any) -> list[dict[str, t.Any]]:
+        raise RatelimitException("429")
+
+    def text(self, query: str, **kwargs: t.Any) -> list[dict[str, t.Any]]:
+        raise RatelimitException("429")
+
+
 class FakeSearcher:
-    """Stands in for `Searcher`, recording the query it was given."""
+    """Stands in for `Searcher`, recording the query it was given.
+
+    Takes raw engine dicts for brevity at the call sites, but normalizes them the
+    way the real `Searcher` does — so `search()` returns the real contract's type
+    (`list[SearchResult]`). Passing raw dicts straight through made this fake
+    differ from production in the one way that mattered: the pipeline consumed
+    the dicts happily while the real `Searcher`'s NamedTuples crashed it.
+    """
 
     def __init__(
         self,
@@ -54,11 +83,11 @@ class FakeSearcher:
         self._raises = raises
         self.calls: list[str] = []
 
-    async def search(self, query: str) -> list[dict[str, t.Any]]:
+    async def search(self, query: str) -> list[SearchResult]:
         self.calls.append(query)
         if self._raises is not None:
             raise self._raises
-        return list(self._hits)
+        return [SearchResult.from_ddgs(hit, detect_mode(query)) for hit in self._hits]
 
 
 class FakeRouter:
@@ -470,9 +499,9 @@ def test_the_search_is_not_subject_to_the_per_url_timeout() -> None:
     """The timeout is per URL, not around the whole run."""
 
     class Slowish(FakeSearcher):
-        async def search(self, query: str) -> list[dict[str, t.Any]]:
+        async def search(self, query: str) -> list[SearchResult]:
             await asyncio.sleep(0.05)
-            return list(self._hits)
+            return [SearchResult.from_ddgs(hit, detect_mode(query)) for hit in self._hits]
 
     pipeline = Pipeline(
         searcher=Slowish(hits=[HIT]),
@@ -840,6 +869,65 @@ def _page(url: str, markdown: str = _API_MARKDOWN) -> dict[str, t.Any]:
         "html": "",
         "links": [],
     }
+
+
+# --- the last wiring gap: a real `Searcher` into the real pipeline -----------
+
+
+@respx.mock
+def test_a_real_searchers_hits_reach_the_pipeline(tmp_path: Path) -> None:
+    """`Pipeline.run` must consume what `Searcher.search` returns.
+
+    Every test above injects `FakeSearcher`, which returns raw *dicts* — the shape
+    `SearchResult.from_ddgs` expects. The real `Searcher` returns already-
+    normalized `SearchResult` NamedTuples, so the pipeline's re-normalization
+    call raised `AttributeError: 'SearchResult' object has no attribute 'get'`
+    and its broad `except` swallowed it into `hits = []`. The whole of research
+    mode returned zero results, and nothing failed, because no test had ever
+    driven the two real classes together.
+
+    This is the T3.1 lesson for the third time: a component whose job is to
+    *wire* other components needs at least one test using the real ones.
+    """
+    respx.post("http://localhost:3002/v2/search").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": {
+                    "web": [
+                        {
+                            "url": "https://a.example/x",
+                            "title": "Bank raises rate",
+                            "description": "s",
+                        }
+                    ]
+                },
+            },
+        )
+    )
+    respx.post("http://localhost:3002/v2/scrape").mock(
+        return_value=httpx.Response(200, json=_local_ok("https://a.example/x"))
+    )
+    router = _mixed_router(tmp_path)
+    searcher = Searcher(
+        ddgs_factory=lambda: FakeDDGS(),
+        backup=LocalFirecrawl(),
+        max_results=5,
+        backoff_s=0,
+    )
+    pipeline = Pipeline(
+        searcher=searcher,
+        router=router,
+        extractor=FakeExtractor(),
+        whitelist=router.whitelist,
+    )
+
+    report = asyncio.run(pipeline.run("latest flooding"))
+
+    assert report.found >= 1, "the pipeline dropped every hit it was given"
+    assert report.results[0].url == "https://a.example/x"
+    assert report.results[0].ok
 
 
 # --- the reason reaches the user (T6.1) --------------------------------------

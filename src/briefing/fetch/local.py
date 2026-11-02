@@ -1,8 +1,9 @@
-"""Client for the self-hosted Firecrawl scrape endpoint.
+"""Client for the self-hosted Firecrawl scrape and search endpoints.
 
 One `scrape` call returns a `LocalScrapeResult` either way: a success carries the
-markdown and heading, a failure carries the SPEC section 4 classification. No
-method here raises on a fetch failure, so one bad URL can never kill a run.
+markdown and heading, a failure carries the SPEC section 4 classification.
+`scrape` never raises on a fetch failure, so one bad URL can never kill a run.
+`search` does raise, and its one caller guards it — see its docstring.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import httpx
 from .errors import ErrorClass, Origin, classify
 
 _SCRAPE_PATH = "/v2/scrape"
+_SEARCH_PATH = "/v2/search"
 _FIRST_H1_CHARS = 200
 
 
@@ -123,6 +125,47 @@ class LocalFirecrawl:
         except (httpx.TimeoutException, httpx.ConnectError, httpx.ConnectTimeout, OSError):
             return False
         return response.status_code < 500
+
+    async def search(self, query: str, limit: int) -> list[dict[str, t.Any]]:
+        """Search the local instance; one raw web item dict per hit.
+
+        The ddgs backup path (SPEC section 5), used only when ddgs has already
+        failed or come back empty. Items are returned unnormalized because
+        `SearchResult.from_search` owns the field mapping; this method owns only
+        the endpoint and the unwrapping.
+
+        Unlike `scrape` and `health`, a unreachable instance raises: the caller
+        (`Searcher._backup_search`) already catches everything, and the backup
+        is the last resort in a search that has already failed, so there is no
+        worse state left to degrade to.
+        """
+        response = await self._http().post(
+            f"{self.base_url}{_SEARCH_PATH}",
+            json={"query": query, "limit": limit, "sources": ["web"]},
+        )
+        return _search_items(response)
+
+
+def _search_items(response: httpx.Response) -> list[dict[str, t.Any]]:
+    """The `data["web"]` items of a v2 search response, or an empty list.
+
+    A search response keys its hits by source type (`{"web": [...]}`) rather
+    than returning a flat list — verified by live probe in NOTES-APIS.md §3.
+    `sources` is always `["web"]` here, so no other key is expected, but a
+    missing or wrongly-typed `web` reads as "no results" rather than raising:
+    a shape we have not seen yet is not worth killing the run over.
+    """
+    try:
+        payload = response.json()
+    except ValueError:
+        return []
+    data = payload.get("data") if isinstance(payload, dict) else None
+    items = data.get("web") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return []
+    # A non-mapping item would make `from_search` raise, and the backup is
+    # already the failure path — drop it instead.
+    return [item for item in items if isinstance(item, dict)]
 
 
 def _error_code(response: httpx.Response) -> str | None:

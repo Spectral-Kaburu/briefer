@@ -211,6 +211,11 @@ class Searcher:
             return []
         try:
             hits = await self.backup.search(query, self.max_results)
+        # Broad on purpose (D22): this is the *only* guard a failed backup has,
+        # because `LocalFirecrawl.search` propagates rather than swallowing.
+        # Narrowing it here silently reintroduces the rate-limit → zero results
+        # bug: an unguarded `AttributeError`-shaped failure returned [] with no
+        # message, which looked exactly like "ddgs found nothing".
         except Exception:  # noqa: BLE001 - a failed backup is still not fatal
             return []
         return [SearchResult.from_search(hit) for hit in hits]
