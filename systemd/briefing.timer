@@ -1,0 +1,45 @@
+[Unit]
+Description=Run the morning briefing at 08:00 Africa/Nairobi
+Documentation=file:///home/spectre/Documents/morning/docs/AETHER_INTEGRATION.md
+
+[Timer]
+# 08:00 local. The machine's timezone is what "local" means, so
+# `timedatectl set-timezone Africa/Nairobi` is what actually places this at
+# 08:00 EAT — changing OnCalendar alone silently drifts with whatever TZ the
+# host has.
+OnCalendar=*-*-* 08:00:00
+
+# Catch-up on resume. A laptop asleep at 08:00 fires the briefing on wake,
+# because a missed morning briefing is worth more than a late one. Persistent
+# lives in /var/lib/systemd/timers, which needs root for a system timer or a
+# writable STATE_DIRECTORY for a user timer — see the note at the bottom.
+Persistent=true
+
+# The gate inside `briefing` is what stops a double fire, so a short accuracy
+# costs nothing and prevents an hour-late briefing from feeling like the default.
+AccuracySec=1min
+
+Unit=briefing.service
+
+[Install]
+WantedBy=timers.target
+
+# --- System timer or user timer? -------------------------------------------
+#
+# As written (User=/Group=, [Install] WantedBy), copy both files to
+# /etc/systemd/system and run:
+#
+#     sudo systemctl daemon-reload
+#     sudo systemctl enable --now briefing.timer
+#     systemctl list-timers briefing
+#
+# A user timer (~/.config/systemd/user/) is the friendlier option here — no
+# sudo, and `voice-tts` is already on the user's PATH. For it: drop User=/Group=
+# from the .service. `Persistent=true` needs a writable stamp directory under
+# systemd's state dir, which a system timer already has (/var/lib, as root) but a
+# user form should confirm once with `systemctl list-timers briefing`.
+#
+# Either way, `timedatectl set-timezone Africa/Nairobi` is what puts 08:00 at
+# 08:00 EAT. This unit does not set a timezone, deliberately: a service that
+# hard-codes one would drift for anyone running it elsewhere.
+

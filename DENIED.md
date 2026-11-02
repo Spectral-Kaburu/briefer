@@ -126,4 +126,21 @@ path (same argv parsing, same `typer.echo`, same real config loader); only the
 "does the console behave" question is open, and `.venv/bin/briefing status` with
 a state dir inside the repo would answer it if it ever matters.
 
+## 2026-11-02 · `systemd-analyze verify`
+
+Command: `systemd-analyze verify systemd/briefing.service`. Why I wanted it: the
+one cheap machine check that both new T6.4 units parse and that their directives
+mean what I think (`OnCalendar=` grammar, `ExecStart=` resolving, no unknown
+keys). Denied. **Not re-tried as a variant.**
+
+**What the owner should do** — it is one command and it is the only thing standing
+between T6.4's units and "verified", since everything else about them (exit codes,
+the PATH `voice-tts` needs, the state dir) was checked against the code:
+
+    systemd-analyze verify systemd/briefing.service systemd/briefing.timer
+
+Until then the units are reviewed-but-unparsed, and `PROGRESS.md` says so. The
+failure mode if I got a directive wrong is a unit that refuses to load, which
+systemd reports at `daemon-reload` time — silent at worst, never wrong-behaving.
+
 

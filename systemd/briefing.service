@@ -1,0 +1,51 @@
+[Unit]
+Description=briefing: the morning news briefing
+Documentation=file:///home/spectre/Documents/morning/docs/AETHER_INTEGRATION.md
+After=network-online.target
+Wants=network-online.target
+
+# One shot: the 24-hour gate inside `briefing` (docs/AETHER_INTEGRATION.md) is
+# what makes a second fire harmless, so `Type=oneshot` and a plain `Restart=no`
+# are correct here. A timer that somehow fires twice produces one briefing.
+
+[Service]
+Type=oneshot
+
+User=spectre
+Group=spectre
+
+# The repo, not an installed copy: the venv's `briefing` is the editable install
+# (`pipx install -e .` / `pip install -e .`), so edits take effect with no redeploy.
+WorkingDirectory=/home/spectre/Documents/morning
+
+# voice-tts lives in ~/.local/bin (PATH's usual systemd default omits it), and the
+# injected runner shells out to it by bare name. Without this the briefing
+# synthesises fine and then fails at delivery — with a clear message, but at the
+# last step.
+Environment=PATH=/home/spectre/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=BRIEFING_STATE_DIR=/home/spectre/.local/state/briefing
+# Optional, uncommented only if the cloud API fallback is wanted. The key is read
+# at call time from this env var and never written to logs or --json output.
+#Environment=FIRECRAWL_API_KEY=__set_by_you__
+
+ExecStart=/home/spectre/Documents/morning/.venv/bin/briefing run
+
+# Exit codes: a refused run (already fired today / Aether speaking) prints
+# "Briefing not spoken: ..." and exits 0 — that is not a failure. A config error
+# or a failed delivery exits 1 and SHOULD be a failed unit, so the owner sees it
+# in `systemctl status briefing`. No SuccessExitStatus override: the default is
+# already the right one.
+
+# journald is the log sink. `briefing status` names the file `briefing.log` for
+# anything journald did not capture, and `systemctl status` / `journalctl -u
+# briefing` cover the rest.
+StandardOutput=journal
+StandardError=journal
+
+# A briefing that is still running after an hour has hung on the network; the
+# per-URL bound in `timeouts.per_url_s` should have prevented this, but a hung
+# timer plus a hung service is how a morning briefing becomes a permanent one.
+TimeoutStartSec=1h
+
+[Install]
+WantedBy=default.target
