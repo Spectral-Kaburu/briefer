@@ -172,7 +172,9 @@ def research(
     time: str = typer.Option(None, "--time", help="Recency window: day, week, month, any."),
     news: bool = typer.Option(False, help="Force news search instead of auto-detect."),
     web: bool = typer.Option(False, help="Force web search instead of auto-detect."),
-    llm: bool = typer.Option(False, "--llm", help="Abstractive summaries via Gemini (T4.1)."),
+    llm: bool = typer.Option(
+        False, "--llm", help="Abstractive summaries via Gemini, instead of extractive."
+    ),
     synth: bool = typer.Option(False, "--synth", help="One overall answer from all summaries."),
     no_api: bool = typer.Option(False, "--no-api", help="Never call the Firecrawl API."),
     json_out: bool = typer.Option(False, "--json", help="Emit the report as JSON."),

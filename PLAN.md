@@ -30,7 +30,7 @@ Skills: `superpowers:test-driven-development`
 
 - [x] **T2.1** `search.py`: normalized `SearchResult`; `ddgs` news/text with auto-detect (latest/breaking/today/news), timelimit with day→week widening, rate-limit handling with backoff. *Accept*: mocked tests for detection, widening, rate limit.
 - [x] **T2.2** Backup search via local Firecrawl `/search` when `ddgs` fails or rate-limits (verify behavior in `NOTES-APIS.md`). *Accept*: mocked fallback test.
-- [ ] **T2.3** Live smoke tests `@pytest.mark.live` for ddgs and local Firecrawl (skipped unless `BRIEFING_LIVE=1`). If local Firecrawl is up, run them once and record results in `PROGRESS.md`.
+- [x] **T2.3** Live smoke tests `@pytest.mark.live` for ddgs and local Firecrawl (skipped unless `BRIEFING_LIVE=1`). If local Firecrawl is up, run them once and record results in `PROGRESS.md`.
 
 ## Phase 3: Research pipeline and CLI
 Skills: `superpowers:test-driven-development`; for `ui.py` also fetch Rich/Typer docs (allowed domains) via a subagent and note the relevant API in `NOTES-APIS.md`.
@@ -61,7 +61,7 @@ Skills: `superpowers:verification-before-completion`, `superpowers:requesting-co
 - [x] **T6.2** Logging (`--verbose`, log file path in `status`), no secrets in logs. *Accept*: test that keys never appear in logs or `--json` output.
 - [x] **T6.3** `README.md`: install (`pipx install -e .`), config, Docker Firecrawl prerequisites, usage examples with sample output, whitelist behavior.
 - [x] **T6.4** `docs/AETHER_INTEGRATION.md` plus `systemd/briefing.service` and `briefing.timer` examples (08:00 Africa/Nairobi), describing the IPC contract Aether must provide.
-- [ ] **T6.5** Full `make check`; run live smoke if `BRIEFING_LIVE=1` and local Firecrawl is up; final **[review]** of the whole repo against SPEC; fix findings.
+- [x] **T6.5** Full `make check`; run live smoke if `BRIEFING_LIVE=1` and local Firecrawl is up; final **[review]** of the whole repo against SPEC; fix findings.
 
 ## Phase 7: Extras (optional)
 - [ ] **T7.1** `(optional)` Project skill `briefing` (via the `skill-creator` skill, if installed) so future Claude sessions know how to use `briefing -r` and read its JSON output.

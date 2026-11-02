@@ -113,10 +113,10 @@ Runs the 24-hour gate, then the audio gate, then headlines per unblocked topic
 minus the ones already seen, then synthesis, then delivery via `voice-tts`. A
 refused run says why.
 
-The scheduled contract is not written yet: `docs/AETHER_INTEGRATION.md` (the IPC
-contract Aether must provide) and `systemd/` (the 08:00 Africa/Nairobi timer) are
-PLAN.md task T6.4 and are still to come. Until then, run `briefing run` yourself or
-from your own cron — there is no Aether dependency for that.
+The IPC contract with Aether (`docs/AETHER_INTEGRATION.md`) and the systemd units
+in `systemd/` (08:00 Africa/Nairobi) are ready if you want Aether to schedule the
+briefing. Until then, run `briefing run` yourself or from your own cron — there is
+no Aether dependency for that.
 
 ### Whitelist
 
@@ -200,7 +200,7 @@ allowlist — see `DENIED.md` if it is refused.
 | `SETUP.md` | How the agent build was started (owner/operator facing) |
 | `DECISIONS.md` | Every decision worth arguing about, with its reason |
 | `NOTES-APIS.md` | Verified facts about Firecrawl and ddgs, with the source |
-| `docs/AETHER_INTEGRATION.md` | The IPC contract Aether must provide *(T6.4, not yet written)* |
+| `docs/AETHER_INTEGRATION.md` | The IPC contract Aether must provide |
 | `docs/sample-output.txt` | Real UI renderings, at 100 and 80 columns |
 
 ## Status
