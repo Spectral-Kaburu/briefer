@@ -1300,5 +1300,13 @@ Also corrected here: the `status` line numbers above, and the "13 tests" count,
 which the reviewer showed contradicted its own table (2 + 6 + 7 = 15 rows, because
 `_fake_speaker` patches the whole file).
 
+**Note for the owner (housekeeping, not my change):** the T8.1 commit contains the
+deletion of `.claude/settings.json` and `.claude/.stop_gate_count` because those
+two deletions were already staged when this session opened (they appear in
+`git status` at session start). The commit recorded a rename already in flight:
+a new untracked `.claude/settings.json` (4459 bytes) is on disk and unchanged. Per
+CLAUDE.md I do not edit `.claude/settings*.json`, so I neither re-added it nor
+touched it — restore or commit it however you prefer.
+
 
 
