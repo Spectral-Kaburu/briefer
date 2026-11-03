@@ -3,20 +3,31 @@
 One `scrape` call returns a `LocalScrapeResult` either way: a success carries the
 markdown and heading, a failure carries the SPEC section 4 classification.
 `scrape` never raises on a fetch failure, so one bad URL can never kill a run.
-`search` does raise, and its one caller guards it — see its docstring.
+
+`FirecrawlSearch` is the separate `/v2/search` client for the ddgs backup and
+carries the same rule for the opposite reason: a failed backup is the *last* event
+in a search that has already failed, so there is nothing left to degrade to and
+no exception worth raising.
 """
 
 from __future__ import annotations
 
+import logging
 import typing as t
 
 import httpx
 
+from ..search import SearchResult
 from .errors import ErrorClass, Origin, classify
 
 _SCRAPE_PATH = "/v2/scrape"
 _SEARCH_PATH = "/v2/search"
 _FIRST_H1_CHARS = 200
+
+#: The instance the SPEC and the shipped config example both name.
+BASE = "http://localhost:3002"
+
+logger = logging.getLogger(__name__)
 
 
 class LocalScrapeResult(t.NamedTuple):
@@ -126,46 +137,110 @@ class LocalFirecrawl:
             return False
         return response.status_code < 500
 
-    async def search(self, query: str, limit: int) -> list[dict[str, t.Any]]:
-        """Search the local instance; one raw web item dict per hit.
 
-        The ddgs backup path (SPEC section 5), used only when ddgs has already
-        failed or come back empty. Items are returned unnormalized because
-        `SearchResult.from_search` owns the field mapping; this method owns only
-        the endpoint and the unwrapping.
+class FirecrawlSearch:
+    """The ddgs backup: POST `/v2/search` and normalize the hits (T8.2).
 
-        Unlike `scrape` and `health`, a unreachable instance raises: the caller
-        (`Searcher._backup_search`) already catches everything, and the backup
-        is the last resort in a search that has already failed, so there is no
-        worse state left to degrade to.
+    Separate from `LocalFirecrawl` because the two clients have incompatible
+    failure contracts. A scrape failure is a *classify* input (SPEC §4's whole
+    table), so `LocalFirecrawl.scrape` must return it; a backup failure is a
+    *fallback* outcome with nothing left to fall back to, so this one swallows it
+    and reports "no results". Putting both under one `except` would let a bad
+    search response become a classified scrape failure, which is not a thing.
+
+    It never raises. A connect error, a timeout, a non-2xx, malformed JSON or a
+    shape this code has not seen all read as "the backup had nothing", logged at
+    DEBUG so a silent backup is visible to anyone who looks.
+    """
+
+    def __init__(
+        self,
+        base_url: str = BASE,
+        timeout_s: float = 30.0,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        # A configured `http://host:3002/` must not become `//v2/search`.
+        self.base_url = base_url.rstrip("/")
+        self.timeout_s = timeout_s
+        self._client = client
+        self._owns_client = client is None
+
+    def _http(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=self.timeout_s)
+        return self._client
+
+    async def aclose(self) -> None:
+        """Close the client this instance created; an injected one is not ours."""
+        if self._owns_client and self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+    async def search(self, query: str, limit: int, mode: str = "web") -> list[SearchResult]:
+        """Normalized hits for `query`, or `[]` for any failure at all.
+
+        `mode` reaches the request as the `sources` array, because a news run
+        asking for `web` is a different search than the one it thinks it made.
+        The response is keyed by source type either way (NOTES-APIS.md §3), so
+        results are read from the key matching `mode` and fall back to `web`.
         """
-        response = await self._http().post(
-            f"{self.base_url}{_SEARCH_PATH}",
-            json={"query": query, "limit": limit, "sources": ["web"]},
-        )
-        return _search_items(response)
+        source = "news" if mode == "news" else "web"
+        try:
+            response = await self._http().post(
+                f"{self.base_url}{_SEARCH_PATH}",
+                json={"query": query, "limit": limit, "sources": [source]},
+            )
+        except Exception as exc:  # noqa: BLE001 - a failed backup is not fatal
+            logger.debug("backup search %s failed: %r", self.base_url, exc)
+            return []
+        if response.status_code >= 400:
+            logger.debug("backup search %s answered %d", self.base_url, response.status_code)
+            return []
+        return _normalize(response, source)
 
 
-def _search_items(response: httpx.Response) -> list[dict[str, t.Any]]:
-    """The `data["web"]` items of a v2 search response, or an empty list.
+def _normalize(response: httpx.Response, source: str) -> list[SearchResult]:
+    """The deduplicated `SearchResult`s of one search response.
 
-    A search response keys its hits by source type (`{"web": [...]}`) rather
-    than returning a flat list — verified by live probe in NOTES-APIS.md §3.
-    `sources` is always `["web"]` here, so no other key is expected, but a
-    missing or wrongly-typed `web` reads as "no results" rather than raising:
-    a shape we have not seen yet is not worth killing the run over.
+    Every shape that is not the documented one reads as "no results" rather than
+    raising: this is the last call in a failed search, and a shape we have not
+    seen is not worth losing the run over (T8.2).
     """
     try:
         payload = response.json()
     except ValueError:
+        logger.debug("backup search returned a non-JSON body")
         return []
     data = payload.get("data") if isinstance(payload, dict) else None
-    items = data.get("web") if isinstance(data, dict) else None
-    if not isinstance(items, list):
+    if not isinstance(data, dict):
+        logger.debug("backup search data was %s, not a mapping", type(data).__name__)
         return []
-    # A non-mapping item would make `from_search` raise, and the backup is
-    # already the failure path — drop it instead.
-    return [item for item in items if isinstance(item, dict)]
+
+    items: list[t.Mapping[str, t.Any]] = []
+    items.extend(_dict_items(data.get(source)))
+    # The instance answers a news request under `web` (probed, NOTES-APIS.md §3),
+    # so both keys are read and the union is deduplicated by URL below.
+    if source != "web":
+        items.extend(_dict_items(data.get("web")))
+
+    results: list[SearchResult] = []
+    seen: set[str] = set()
+    for item in items:
+        result = SearchResult.from_search(item)
+        # A non-mapping item would make `from_search` raise, and the backup is
+        # already the failure path — drop it instead.
+        if not result.url or result.url in seen:
+            continue
+        seen.add(result.url)
+        results.append(result)
+    return results
+
+
+def _dict_items(value: t.Any) -> list[t.Mapping[str, t.Any]]:
+    """`value` as a list of mappings, or an empty list if it is anything else."""
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def _error_code(response: httpx.Response) -> str | None:

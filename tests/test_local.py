@@ -5,9 +5,6 @@ All mocked with respx; no real network, no real Firecrawl.
 
 from __future__ import annotations
 
-import json
-import typing as t
-
 import httpx
 import pytest
 import respx
@@ -190,67 +187,3 @@ async def test_health_down_on_connection_refused(client: LocalFirecrawl) -> None
 async def test_health_down_on_server_error(client: LocalFirecrawl) -> None:
     respx.get(f"{BASE}/").mock(return_value=httpx.Response(503, text="down"))
     assert await client.health() is False
-
-
-# --- search (T2.2a) --------------------------------------------------------
-
-SEARCH_ITEM: dict[str, t.Any] = {
-    "url": "https://example.com/e",
-    "title": "Bank raises lending rate",
-    "description": "The central bank raised rates by fifty basis points.",
-    "category": "finance",
-}
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_search_unwraps_the_web_key(client: LocalFirecrawl) -> None:
-    """A /v2/search response nests hits under `data["web"]`, not a flat list."""
-    respx.post(f"{BASE}/v2/search").mock(
-        return_value=httpx.Response(200, json={"success": True, "data": {"web": [SEARCH_ITEM]}})
-    )
-    hits = await client.search("latest flooding", 10)
-    assert hits == [SEARCH_ITEM]
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_search_asks_for_web_source_only(client: LocalFirecrawl) -> None:
-    """`category` is dropped downstream, and `sources:["news"]` returns web items
-    anyway (NOTES-APIS.md), so `web` is the only source worth asking for."""
-    route = respx.post(f"{BASE}/v2/search").mock(
-        return_value=httpx.Response(200, json={"data": {"web": []}})
-    )
-    await client.search("latest flooding", 7)
-    body = json.loads(route.calls.last.request.content)
-    assert body["query"] == "latest flooding"
-    assert body["limit"] == 7
-    assert body["sources"] == ["web"]
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_search_returns_empty_without_a_web_key(client: LocalFirecrawl) -> None:
-    respx.post(f"{BASE}/v2/search").mock(
-        return_value=httpx.Response(200, json={"success": True, "data": {"news": []}})
-    )
-    assert await client.search("latest flooding", 10) == []
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_search_returns_empty_when_web_is_not_a_list(client: LocalFirecrawl) -> None:
-    respx.post(f"{BASE}/v2/search").mock(
-        return_value=httpx.Response(200, json={"data": {"web": "not a list"}})
-    )
-    assert await client.search("latest flooding", 10) == []
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_search_surfaces_a_dead_local_instance(client: LocalFirecrawl) -> None:
-    """Unlike `scrape`, a failed backup search raises — `Searcher._backup_search`
-    is the caller that must never fail, so the adapter leaves it that way."""
-    respx.post(f"{BASE}/v2/search").mock(side_effect=httpx.ConnectError("refused"))
-    with pytest.raises(httpx.ConnectError):
-        await client.search("latest flooding", 10)

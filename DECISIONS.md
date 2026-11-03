@@ -370,3 +370,59 @@ visible rather than incidental.
 not, so a future test that *should* assert the speaker was never built has to
 overwrite the fixture to restore the real thing — and there is currently no test
 that does, which is worth knowing before relying on it.
+
+## D25 — 2026-11-03 · the backup adapter never raises; D22's asymmetry is resolved (T8.2)
+
+T8.0(a) flagged the conflict: D22 made `LocalFirecrawl.search()` **raise** and put
+the guard in `Searcher._backup_search`, while PLAN.md T8.2 asks for a
+`FirecrawlSearch` that **never raises**. The owner's task text is the later
+instruction, and it is the one written knowing D22 existed.
+
+**Decision**: `FirecrawlSearch.search` swallows every failure — connect error,
+timeout, non-2xx, malformed JSON and any shape this code has not seen — and
+returns `[]`, logging at DEBUG. `_backup_search`'s broad `except` stays, but it
+is no longer load-bearing: it now only catches a mis-wired seam, not a dead
+instance.
+
+**Reason**: D22's worry was *duplication* — two copies of "a failed backup is
+not fatal". It is resolved, not ignored, because the two clients have different
+callers and T8.2 gives them different homes: `LocalFirecrawl.scrape` feeds
+SPEC §4's classify table, so its failures must survive as classifications;
+`FirecrawlSearch` is the last event of a search that already failed, so its
+failures have nothing left to degrade to and nothing to classify. Putting both
+under one `except` is what D22 was arguing against; splitting the *classes*
+rather than the *policy* keeps one policy per failure mode.
+
+**Sub-decision (the one T8.2 names explicitly):** an *empty* ddgs answer — not a
+failed one — also triggers the backup, logged at INFO ("ddgs returned nothing,
+trying backup"). A rate-limited or timed-out search and a search that genuinely
+found nothing are indistinguishable to a user waiting for a briefing, and the
+backup costs one local HTTP call.
+
+Cost, so it is not rediscovered: `FirecrawlSearch` returning `[]` means a
+*degraded instance* and a *broken adapter* look identical to any caller. The live
+test in `test_live.py` therefore probes the raw endpoint before failing, and
+skips when the service is degraded. `NOTES-APIS.md` §2 records the observed
+symptom: the API answers 200 with an empty `data` while its engines are down.
+
+Related: D22, D21, and the T8.0(a) note that T2.2a's shape was a first cut.
+
+`_speaker` builds a real `Gemini()`, and the google-genai SDK resolves a host when
+it constructs its client, so an unpatched seam reached the network from 7 tests in
+that file.
+
+**Decision**: one autouse `_fake_speaker` fixture patches `_SPEAKER` for the whole
+file, instead of adding a line beside each of the 15 `_STATE_DIR` patches.
+
+**Reason**: the per-site version was tried first and it broke 5 tests that build
+their own `FakeSpeaker` and assert on `speaker.calls` — the added line came *after*
+theirs and silently overrode it. Two of those five assert `speaker.calls == []`,
+which made the clobbered tests pass while asserting nothing at all. An autouse
+fixture runs before the test body, so a test's own `monkeypatch.setattr` still
+wins and both kinds of test keep their meaning; and the ordering guarantee is
+visible rather than incidental.
+
+**Cost**: every test in the file now gets a fake speaker whether it wanted one or
+not, so a future test that *should* assert the speaker was never built has to
+overwrite the fixture to restore the real thing — and there is currently no test
+that does, which is worth knowing before relying on it.

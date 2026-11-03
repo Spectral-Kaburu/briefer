@@ -16,7 +16,7 @@ import pytest
 import respx
 from ddgs.exceptions import RatelimitException, TimeoutException
 
-from briefing.fetch.local import LocalFirecrawl
+from briefing.fetch.local import FirecrawlSearch
 from briefing.search import (
     _NO_DATE,
     Searcher,
@@ -395,11 +395,14 @@ class FakeFirecrawlSearch:
         self._raises = raises
         self.calls: list[dict[str, t.Any]] = []
 
-    async def search(self, query: str, limit: int) -> list[dict[str, t.Any]]:
-        self.calls.append({"query": query, "limit": limit})
+    async def search(self, query: str, limit: int, mode: str = "web") -> list[SearchResult]:
+        # Takes raw item dicts like the old `LocalFirecrawl.search` did and
+        # normalizes them, so these tests keep asserting on the *mapping* while
+        # matching the return type `Searcher` now expects from a backup.
+        self.calls.append({"query": query, "limit": limit, "mode": mode})
         if self._raises is not None:
             raise self._raises
-        return self._results
+        return [SearchResult.from_search(hit) for hit in self._results]
 
 
 def test_ddgs_success_never_touches_the_backup(fake: FakeDDGS) -> None:
@@ -417,7 +420,7 @@ def test_ddgs_failure_falls_back_to_local_search() -> None:
     searcher = _searcher(ddgs_factory=lambda: fake, backup=backup, backoff_s=0)
     results = asyncio.run(searcher.search("latest flooding"))
     assert [r.title for r in results] == ["Bank raises lending rate"]
-    assert backup.calls == [{"query": "latest flooding", "limit": 10}]
+    assert backup.calls == [{"query": "latest flooding", "limit": 10, "mode": "news"}]
 
 
 def test_backup_results_are_normalized() -> None:
@@ -450,6 +453,24 @@ def test_rate_limit_also_falls_back() -> None:
     results = asyncio.run(searcher.search("latest flooding"))
     assert len(results) == 1
     assert len(backup.calls) == 1
+
+
+def test_timeout_also_falls_back() -> None:
+    """SPEC section 5: the backup exists for when ddgs times out.
+
+    Distinct from `test_timeout_is_retried_once` (no backup configured, so the
+    retry is all that can happen) and from `test_rate_limit_also_falls_back`
+    above. A timeout retries once, then exhausts the budget, and the *exhausted*
+    timeout is what reaches the backup — so this is the gap that hid T2.2's
+    missing adapter.
+    """
+    fake = FakeDDGS(news=[], news_raises=TimeoutException("too slow"))
+    backup = FakeFirecrawlSearch(results=[SEARCH_HIT])
+    searcher = _searcher(ddgs_factory=lambda: fake, backup=backup, backoff_s=0)
+    results = asyncio.run(searcher.search("latest flooding"))
+    assert len(results) == 1
+    assert results[0].origin == "search"
+    assert backup.calls == [{"query": "latest flooding", "limit": 10, "mode": "news"}]
 
 
 def test_both_fail_returns_empty(fake: FakeDDGS) -> None:
@@ -492,10 +513,10 @@ def test_a_rate_limited_ddgs_is_really_rescued_by_local_firecrawl() -> None:
 
     Every test above injects `FakeFirecrawlSearch`, which is shaped the way
     `cli._searcher` passes its backup. Production passes a real
-    `LocalFirecrawl`, which for a while had no `search` method at all — so
+    `FirecrawlSearch`, which for a while had no adapter behind it at all — so
     `_backup_search`'s broad `except` ate the `AttributeError` and a
     rate-limited run returned zero results with nothing to say why. This test
-    drives the real class through the real `Searcher`, so losing the adapter
+    drives the real adapter through the real `Searcher`, so losing the wiring
     fails here instead of silently in production.
     """
     respx.post(f"{BASE}/v2/search").mock(
@@ -505,7 +526,7 @@ def test_a_rate_limited_ddgs_is_really_rescued_by_local_firecrawl() -> None:
         ddgs_factory=lambda: FakeDDGS(news_raises=RatelimitException("429 too many")),
         region="ke-en",
         max_results=5,
-        backup=LocalFirecrawl(base_url=BASE),
+        backup=FirecrawlSearch(base_url=BASE),
         backoff_s=0,
     )
 

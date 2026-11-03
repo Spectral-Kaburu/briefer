@@ -1308,5 +1308,57 @@ a new untracked `.claude/settings.json` (4459 bytes) is on disk and unchanged. P
 CLAUDE.md I do not edit `.claude/settings*.json`, so I neither re-added it nor
 touched it — restore or commit it however you prefer.
 
+## T8.2 — 2026-11-03 · backup-search adapter, live run flake explained
+
+`make live` failed twice in the owner's run and again in this one, on
+`test_the_real_backup_adapter_searches_the_live_instance`. **Root cause: the local
+Firecrawl's engines intermittently go down while its API process stays up.**
+
+Probed with `curl` (permitted by CLAUDE.md) during the failure window:
+
+- `POST /v2/search` → HTTP **200** with `{"success":true,"data":{},"creditsUsed":0}`
+  — a *valid, empty* page, not an error. `FirecrawlSearch` correctly returns `[]`.
+- `POST /v2/scrape` → HTTP **500**, `code: "SCRAPE_ALL_ENGINES_FAILED"`,
+  `engines tried: [playwright, fetch]`.
+- `GET /` → still HTTP 200, so **health/liveness is not evidence search or scrape
+  will work**.
+
+All three states were seen within ~20 minutes (real results, empty `data`, scrape
+500), and each cleared on its own. So the adapter was right both times; the test
+was wrong to read "no results" as "the adapter is broken". Recorded in
+`NOTES-APIS.md` §2 under "Transient engine failure".
+
+Changes, all driven by the reviewer and by this diagnosis:
+
+1. `tests/test_live.py` — the dead-instance test asserted on `web`, a variable
+   that only exists in the *previous* test's scope (`NameError`). That "no date
+   field" check belongs to the test that has real items, so it moved there and
+   asserts `not any(r.age ...)`; the emptiness is now asserted where it means
+   something.
+2. `tests/test_live.py` — the live search test now takes a second opinion before
+   failing: if the adapter got nothing, it probes the raw endpoint itself, and
+   **skips** (never fails) when the instance is unreachable or its engines are
+   degraded. A broken adapter against a healthy instance still fails loudly —
+   proven by sabotaging the adapter's `base_url` to a dead port and watching the
+   test fail, while the raw probe kept returning real results.
+3. `src/briefing/fetch/local.py:162` — `FirecrawlSearch` did not `rstrip("/")` its
+   `base_url` while `LocalFirecrawl` did, so a configured `http://host:3002/`
+   became `//v2/search` (a 404). Fixed, with
+   `test_a_configured_trailing_slash_is_not_doubled`; the fix was sabotage-tested
+   by restoring the old line and watching the new test fail.
+4. `tests/test_search.py` — added `test_timeout_also_falls_back`. T8.2 asks for a
+   `TimeoutException` from ddgs reaching the backup; the suite had a
+   `RatelimitException` case but only tested a timeout *without* a backup
+   configured, so `TimeoutException` never proved it reaches the fallback.
+5. `make check` was red on uncommitted work (8 ruff findings across
+   `test_cli.py`/`test_local.py`/`test_live.py`, plus `ruff format --check` on the
+   new T8.2 code). All fixed via `make fmt` + the one manual `t.Self`, and
+   `make check` is green: **580 passed, 6 skipped**. `make live`: **6 passed**.
+
+The instance was healthy at the end of this session, so the T8.2 live acceptance
+(`make live` green) is satisfied — but it is **flaky by nature** and the owner
+should expect the skip to fire whenever Docker's engines are unhappy. Re-run
+`make live` after a skip; a genuine break still fails.
+
 
 

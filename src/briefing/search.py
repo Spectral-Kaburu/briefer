@@ -9,12 +9,15 @@ nothing to offer.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import typing as t
 from datetime import UTC, datetime, timedelta
 
 from ddgs import DDGS
 from ddgs.exceptions import RatelimitException, TimeoutException
+
+logger = logging.getLogger(__name__)
 
 # Query words that mean "the user wants the news", checked at word boundaries so
 # "newest" is not read as "news" (SPEC section 5 auto-detect).
@@ -210,15 +213,18 @@ class Searcher:
         if self.backup is None:
             return []
         try:
-            hits = await self.backup.search(query, self.max_results)
-        # Broad on purpose (D22): this is the *only* guard a failed backup has,
-        # because `LocalFirecrawl.search` propagates rather than swallowing.
-        # Narrowing it here silently reintroduces the rate-limit → zero results
-        # bug: an unguarded `AttributeError`-shaped failure returned [] with no
-        # message, which looked exactly like "ddgs found nothing".
+            # `FirecrawlSearch.search` returns `SearchResult`s already, so
+            # re-normalizing here would be the T2.2b bug again: `from_search`
+            # raises on a NamedTuple, and the broad `except` below would hide it
+            # as an empty backup.
+            hits = await self.backup.search(query, self.max_results, self.mode_for(query))
+        # Broad on purpose: the backup is the last resort in a search that has
+        # already failed. `FirecrawlSearch` never raises, so this only fires for a
+        # seam that is mis-wired — and a failed backup is still not fatal.
         except Exception:  # noqa: BLE001 - a failed backup is still not fatal
+            logger.debug("backup search failed for %r", query)
             return []
-        return [SearchResult.from_search(hit) for hit in hits]
+        return list(hits)
 
     def _kwargs(self, timelimit: str | None) -> dict[str, t.Any]:
         kwargs: dict[str, t.Any] = {

@@ -6,7 +6,7 @@
 # `briefing config` shows the effective config and where it lives.
 
 # Topics used by `briefing run` (briefing mode). Research mode ignores these.
-news_topics: ["technology", "world news"]
+news_topics: ["technology", "world news", "Breaking news", "Formula 1 news"]
 
 search:
   # How many results to aim for per query.
@@ -39,7 +39,7 @@ whitelist:
   auto_add: true
   path: whitelist.yaml
   # When true, whitelisted domains skip local and go straight to the API.
-  prefer_api_for_whitelisted: false
+  prefer_api_for_whitelisted: true
 
 summary:
   # extractive (offline, instant) or llm (Gemini, opt-in via --llm).

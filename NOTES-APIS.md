@@ -71,6 +71,19 @@ below are from direct curl, which CLAUDE.md permits).
 | `sources: ["news"]` | returns items under `data.web` anyway — no news branch, no date |
 | Other response fields | `creditsUsed` (int, 2 seen) and `id` (a request id) |
 
+### Transient engine failure (probed 2026-11-03, worth knowing before debugging the adapter)
+
+| Item | Verified fact |
+|---|---|
+| Search, engines down | `POST /v2/search` still answers **HTTP 200** with `{"success":true,"data":{},"creditsUsed":0}` — an **empty mapping**, not an error. A client that checks the status code sees a valid, empty page and reports "no results" |
+| Scrape, engines down | `POST /v2/scrape` answers **HTTP 500** with `code: "SCRAPE_ALL_ENGINES_FAILED"` and an `engines tried: [playwright, fetch]` list, while `GET /` still answers 200 `{"message":"Firecrawl API"}` |
+| What it means | the API process is up while its engines are not, so **health/liveness is not evidence that search or scrape will work**. Both states were observed to clear on their own within minutes |
+
+So an empty `data: {}` is a *degradation signal*, not a "the query matched nothing" signal — the
+adapter cannot tell the two apart, and `creditsUsed: 0` is the one hint. `FirecrawlSearch` returns
+`[]` for both, which is correct (it must never raise), but a live test asserting on non-empty results
+can fail against a healthy adapter when the instance is in this state.
+
 So the two suspects are settled, and neither changes shipped behaviour:
 
 1. **`age` stays empty for backup hits** — confirmed, not merely assumed. The

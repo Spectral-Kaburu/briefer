@@ -15,9 +15,12 @@ import typing as t
 from datetime import datetime
 from pathlib import Path
 
+import respx
+from ddgs.exceptions import TimeoutException
 from typer.testing import CliRunner
 
 import briefing.cli as cli_module
+import briefing.search as search_module
 from briefing.cli import app
 from briefing.fetch.router import ErrorClass, Method
 from briefing.pipeline import Report, Result
@@ -26,6 +29,25 @@ from briefing.whitelist import Whitelist
 runner = CliRunner()
 
 _VERBOSE_HELP = ["research", "--help"]
+
+
+class _DeadDDGS:
+    """ddgs that times out: the failure SPEC section 5 sends to the backup.
+
+    A context manager because `Searcher._run` opens one per call.
+    """
+
+    def __enter__(self) -> t.Self:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def text(self, *a: t.Any, **k: t.Any) -> list[dict[str, t.Any]]:
+        raise TimeoutException("ddgs timed out")
+
+    def news(self, *a: t.Any, **k: t.Any) -> list[dict[str, t.Any]]:
+        raise TimeoutException("ddgs timed out")
 
 
 class FakePipeline:
@@ -844,3 +866,48 @@ def test_a_broken_config_file_fails_research_with_a_message(
     )
     assert result.exit_code != 0
     assert "news_topics" in result.stderr
+
+
+# --- the backup search wiring (T8.2) ---------------------------------------
+
+
+@respx.mock
+def test_a_timed_out_ddgs_really_reaches_the_backup(monkeypatch: t.Any, tmp_path: Path) -> None:
+    """The wiring itself, not the adapter.
+
+    Every search test above injects a fake backup, so nothing proved that
+    `_searcher` passes a *real* one into the real `Searcher`: the T2.2 gap was
+    exactly that, and a broad `except` hid it as "ddgs found nothing". This one
+    fails only ddgs, lets the real factories run, and asserts the real adapter
+    was reached over the wire.
+    """
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    # Only ddgs is faked. `_searcher`, the real `Searcher` and the real
+    # `FirecrawlSearch` all stay — that is the whole point of the test.
+    monkeypatch.setattr(search_module, "DDGS", _DeadDDGS)
+
+    backup_route = respx.post("http://localhost:3002/v2/search").respond(
+        200,
+        json={
+            "success": True,
+            "data": {
+                "web": [
+                    {
+                        "url": "https://nation.africa/bank-raises-rate",
+                        "title": "Bank raises rate",
+                        "description": "The central bank acted.",
+                    }
+                ]
+            },
+        },
+    )
+    # The router's fetch of the one hit the backup returns.
+    respx.post("http://localhost:3002/v2/scrape").respond(
+        200, json={"success": True, "data": {"markdown": "Body.", "metadata": {"title": "T"}}}
+    )
+
+    result = runner.invoke(app, ["research", "latest flooding in kenya", "--results", "1"])
+
+    assert result.exit_code == 0, result.stderr
+    assert backup_route.called, "the backup was never reached — the wiring is broken"
+    assert "Bank raises rate" in result.stdout

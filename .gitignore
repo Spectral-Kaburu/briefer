@@ -12,3 +12,7 @@ dist/
 seen_headlines.json
 whitelist.yaml
 *.log
+.smoke-state/
+DECISIONS.md
+DENIED.md
+PROGRESS.md

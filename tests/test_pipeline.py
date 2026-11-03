@@ -17,7 +17,7 @@ import respx
 from ddgs.exceptions import RatelimitException
 
 from briefing.fetch.api import ApiFirecrawl
-from briefing.fetch.local import LocalFirecrawl
+from briefing.fetch.local import FirecrawlSearch, LocalFirecrawl
 from briefing.fetch.router import ErrorClass, FetchResult, Method, Router
 from briefing.pipeline import (
     _DEFAULT_TIMEOUT_S,
@@ -912,7 +912,10 @@ def test_a_real_searchers_hits_reach_the_pipeline(tmp_path: Path) -> None:
     router = _mixed_router(tmp_path)
     searcher = Searcher(
         ddgs_factory=lambda: FakeDDGS(),
-        backup=LocalFirecrawl(),
+        # T8.2: the real backup adapter. `LocalFirecrawl` has no `search`, so
+        # passing one here is how the T2.2b bug looked: the broad `except` in
+        # `_backup_search` ate the AttributeError and every run found nothing.
+        backup=FirecrawlSearch(),
         max_results=5,
         backoff_s=0,
     )

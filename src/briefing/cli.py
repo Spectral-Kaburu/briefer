@@ -27,7 +27,7 @@ from briefing.config import Config, ConfigError, load_config, resolve_api_key
 from briefing.deliver import DeliveryError, SubprocessRunner, deliver
 from briefing.extract import Extracted, extract
 from briefing.fetch.api import ApiFirecrawl, usage_today
-from briefing.fetch.local import LocalFirecrawl
+from briefing.fetch.local import FirecrawlSearch, LocalFirecrawl
 from briefing.fetch.router import Router
 from briefing.log import configure as configure_logging
 from briefing.log import get_logger
@@ -559,12 +559,18 @@ def _local_firecrawl(loaded: Config) -> LocalFirecrawl:
 
 
 def _searcher(loaded: Config, mode: str | None) -> Searcher:
+    # T8.2: the backup is `FirecrawlSearch`, not the scrape client — it POSTs to
+    # `/v2/search`, honors `mode`, and never raises (a failed backup is the last
+    # event in a search that already failed).
     return Searcher(
         region=loaded.search.region,
         max_results=loaded.search.results,
         # SPEC section 2: a news query starts at the past day and widens on its
         # own; `Searcher`'s own default carries that rule, so nothing is set here.
-        backup=_local_firecrawl(loaded),
+        backup=FirecrawlSearch(
+            base_url=loaded.firecrawl.local.base_url,
+            timeout_s=loaded.firecrawl.local.timeout_s,
+        ),
         mode=mode,
     )
 

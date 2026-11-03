@@ -17,7 +17,7 @@ import os
 import httpx
 import pytest
 
-from briefing.fetch.local import LocalFirecrawl
+from briefing.fetch.local import FirecrawlSearch, LocalFirecrawl
 from briefing.search import Searcher, SearchResult
 
 # The self-hosted instance (SPEC section 7). Not configurable on purpose: a live
@@ -103,5 +103,65 @@ async def test_local_firecrawl_search_matches_the_documented_shape() -> None:
     assert all(item.url.startswith("http") for item in items), items
     assert all(item.title for item in items), "an item carried no title"
     assert all(item.snippet for item in items), "an item carried no description"
-    # Verified: no date field on any item, so `age` stays empty for backup hits.
-    assert not any("date" in hit for hit in web), "a date field appeared; NOTES-APIS is stale"
+
+
+@requires_live
+@pytest.mark.live
+@pytest.mark.asyncio
+async def test_the_real_backup_adapter_searches_the_live_instance() -> None:
+    """T8.2: the adapter itself, not the raw response it reads.
+
+    The unit tests mock respx, so nothing proved the real `FirecrawlSearch`
+    unwraps a real `data.web` — and that unwrapping is the one thing T2.2 got wrong
+    the first time. Runs against the owner's instance, so it stays `live`.
+    """
+    search = FirecrawlSearch(base_url=_BASE_URL, timeout_s=60.0)
+    try:
+        results = await search.search("kenya technology news", limit=5, mode="web")
+    finally:
+        await search.aclose()
+
+    if not results:
+        # The instance answers 200 with an empty `data` while its engines are
+        # down (NOTES-APIS.md, probed 2026-11-03), and an adapter that returned
+        # nothing and an adapter that is broken look identical from out here.
+        # A second opinion: if the raw endpoint has nothing either, the service
+        # is degraded, so there is nothing left to prove — skip, do not fail.
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as probe:
+                raw = await probe.post(
+                    f"{_BASE_URL}/v2/search",
+                    json={"query": "kenya technology news", "limit": 5, "sources": ["web"]},
+                )
+            payload = raw.json()
+        except Exception as exc:  # noqa: BLE001 - a dead instance proves nothing
+            pytest.skip(f"local Firecrawl unreachable ({exc!r}); re-run when it is up")
+        if not (payload.get("data") or {}).get("web"):
+            pytest.skip("local Firecrawl engines are degraded (empty data.web); re-run later")
+
+    assert results, "the real adapter found nothing the raw probe could see"
+    assert all(r.origin == "search" for r in results), results
+    assert all(r.url.startswith("http") for r in results), results
+    assert all(r.title for r in results), "an item carried no title"
+    assert all(r.snippet for r in results), "an item carried no description"
+    # No date field on any item, so `age` stays empty for backup hits. Asserted
+    # here rather than below because only this test has real items to look at.
+    assert not any(r.age for r in results), "a date field appeared; NOTES-APIS is stale"
+
+
+@requires_live
+@pytest.mark.live
+@pytest.mark.asyncio
+async def test_the_real_backup_adapter_never_raises_on_a_dead_instance() -> None:
+    """The adapter's whole contract, proven against a port with nothing on it.
+
+    A port that is closed rather than filtered, so the connection is refused
+    rather than hanging: the failure a Docker-stopped machine actually produces.
+    """
+    search = FirecrawlSearch(base_url="http://localhost:3999", timeout_s=5.0)
+    try:
+        results = await search.search("kenya technology news", limit=5, mode="web")
+    finally:
+        await search.aclose()
+
+    assert results == [], "a dead instance must read as no results, not a crash"

@@ -167,5 +167,24 @@ Two things the owner should know rather than discover later:
    more limited than one Makefile target makes it look, and the next such need
    will not have a target.
 
+## 2026-11-02 · `cp ... && sed -i ... && pytest && cp ...` (sabotage check)
+
+Command: back up `src/briefing/fetch/local.py` to `/tmp`, flip `_SEARCH_PATH` to
+the wrong endpoint with `sed -i`, run pytest to watch the new tests fail, then
+restore the backup with a second `cp`. Why I wanted it: the T2.2a sabotage check
+("does the new wiring test actually bite") without permanently editing source.
+
+Denied because of the compound form (`&&` plus a `/tmp` redirect), both of which
+CLAUDE.md already forbids — so it cost nothing to give up. **Not re-tried as a
+variant.** The sabotage was done with the `Edit` tool instead: one edit to break
+the constant, one pytest run, one edit to restore it. Slower, but it is the
+dedicated tool and it never leaves the file half-written, which a `cp` restore
+would have if the pytest run had been interrupted. **Nothing needed from the
+owner.**
+
+Worth recording for a different reason: the two `/tmp` writes it wanted are the
+reason this session has now hit the same wall five times. A `scratch/` directory
+inside the repo (gitignored) would satisfy every one of those probes.
+
 
 
