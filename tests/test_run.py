@@ -127,6 +127,41 @@ def test_run_does_not_search_a_blocked_topic(monkeypatch: t.Any, tmp_path: Path)
     assert "technology" in search.asked
 
 
+def test_run_hands_the_speaker_the_configured_user_name(monkeypatch: t.Any, tmp_path: Path) -> None:
+    """T8.5: config's `briefing.user_name` is what the greeting will say.
+
+    Asserted at the wiring rather than in `synth`, because this is the half that
+    can silently fail: the greeting is the *fallback* for a run where nothing
+    could be fetched, so a dropped name only shows up on a bad morning. It also
+    has to keep the assistant's name, which is the prompt's own — swapping the
+    two is exactly the T5.4 shape.
+
+    The seam here is `Speaker`, not `_SPEAKER`: replacing the factory with a fake
+    would skip the code under test, and a fake that reads the config back off
+    `loaded` asserts the config against itself. The real `_speaker` runs, and the
+    fake `Speaker` records the keywords it was handed.
+    """
+    built: list[dict[str, t.Any]] = []
+
+    class RecordingSpeaker(FakeSpeaker):
+        def __init__(self, *args: t.Any, **kwargs: t.Any) -> None:
+            built.append(kwargs)
+            super().__init__()
+
+    monkeypatch.setattr(cli_module, "_SPEAKER", cli_module._speaker)
+    monkeypatch.setattr(cli_module, "Speaker", RecordingSpeaker)
+    monkeypatch.setattr(cli_module, "_SEARCH", lambda *a, **k: FakeSearch({"technology": ["A"]}))
+    monkeypatch.setattr(cli_module, "_RUNNER", lambda: FakeRunner())
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    config = tmp_path / "briefing.yaml"
+    config.write_text("news_topics: [technology]\nbriefing:\n  user_name: Sam\n", encoding="utf-8")
+    result = runner.invoke(app, ["run", "--config", str(config)])
+    assert result.exit_code == 0, result.stderr
+    assert len(built) == 1, "the speaker was never built"
+    assert built[0]["user_name"] == "Sam"
+    assert built[0]["name"] == "Aether"
+
+
 def test_run_speaks_the_headlines_it_gathered(monkeypatch: t.Any, tmp_path: Path) -> None:
     speaker = FakeSpeaker()
     monkeypatch.setattr(cli_module, "_SPEAKER", lambda *a, **k: speaker)

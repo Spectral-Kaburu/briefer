@@ -424,22 +424,30 @@ symptom: the API answers 200 with an empty `data` while its engines are down.
 
 Related: D22, D21, and the T8.0(a) note that T2.2a's shape was a first cut.
 
-`_speaker` builds a real `Gemini()`, and the google-genai SDK resolves a host when
-it constructs its client, so an unpatched seam reached the network from 7 tests in
-that file.
+## D26 — 2026-11-04 · `user_name` and `name` are the two directions, and only one has a default (T8.5)
 
-**Decision**: one autouse `_fake_speaker` fixture patches `_SPEAKER` for the whole
-file, instead of adding a line beside each of the 15 `_STATE_DIR` patches.
+The owner's first real run printed "Good morning, Aether." Aether is the
+assistant. `briefing.name` filled two different slots — said the assistant's name
+into the greeting *and* into the prompt's "You are {name}" — and neither SPEC §6
+nor the code distinguished them, so the default greeted the speaker.
 
-**Reason**: the per-site version was tried first and it broke 5 tests that build
-their own `FakeSpeaker` and assert on `speaker.calls` — the added line came *after*
-theirs and silently overrode it. Two of those five assert `speaker.calls == []`,
-which made the clobbered tests pass while asserting nothing at all. An autouse
-fixture runs before the test body, so a test's own `monkeypatch.setattr` still
-wins and both kinds of test keep their meaning; and the ordering guarantee is
-visible rather than incidental.
+**Decision**: `user_name` (who is *addressed*, default `""`) and `name` (who
+*speaks*, still "Aether") are separate config fields.
 
-**Cost**: every test in the file now gets a fake speaker whether it wanted one or
-not, so a future test that *should* assert the speaker was never built has to
-overwrite the fixture to restore the real thing — and there is currently no test
-that does, which is worth knowing before relying on it.
+**Reason**: SPEC §6 only ever describes the greeting as "plain session greeting".
+It says nothing about a name, which means a name must be opt-in: the failure
+fallback has to be safe with no config at all, and an empty `user_name` gives
+"Good morning." — not "Good morning, .", which is what the old `.format(name="")`
+produced and what a test actively pinned. Keeping `name` preserves SPEC §6's "You
+are {name}" prompt line without inventing a second persona.
+
+**Cost**: two fields where there was one, and the template carries one more slot
+({address}) whose non-empty form says "The person you are speaking to is called
+X — refer to them by name." It is empty unless a name is set, because a model told
+to address somebody *by name* and given none invents one — that is why the
+instruction is conditional and not just the value. Wiring is not covered by
+`synth` alone: `_speaker` must pass both, and that test patches `Speaker` rather
+than `_SPEAKER`, because patching the factory replaces the code under test — the
+first version of the wiring test did exactly that and passed under a sabotage that
+swapped the two names back. A factory needs its *product* faked.
+

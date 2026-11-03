@@ -1422,6 +1422,55 @@ the copy hint already tells the owner where to put the file.
 Not done here: T8.4's region default, T8.5's `user_name`, and the README's
 config-discovery section (T8.8) still describe the explicit-only world.
 
+## T8.5 — 2026-11-04 · `user_name` and `name` split, and the greeting stopped greeting itself
+
+The T5.4 incident, closed. The owner's first real run printed "Good morning,
+Aether." — the assistant's own name, in a line whose subject was the *owner*.
+
+What the defect actually was: one config field (`briefing.name`, default
+"Aether") filled both the greeting and the prompt's "You are {name}", so the
+default named the assistant as speaker **and** listener. The fix is not a new
+default string, it is two fields:
+
+1. `config.py` — `briefing.user_name` (default `""`, who is addressed) beside
+   `briefing.name` (still "Aether", who speaks). The example config now carries
+   `user_name: ""` with the comment explaining why the assistant's name never
+   fills it.
+2. `synth.py` — `NO_NAME_GREETING = "Good morning."` for the empty case, and
+   `PLAIN_GREETING = "Good morning, {name}."` for the set one. The old code
+   formatted the empty string straight in, producing "Good morning, ." — a
+   spoken comma and a pause — and `test_a_briefing_with_no_name_still_speaks`
+   actively pinned it. `_greeting` now branches, and `_address_line` emits the
+   prompt's name instruction only when a name exists, because a model told to
+   address somebody *by name* and given none invents one.
+3. `prompts/briefing.txt` — the old "Refer to the person by name once, at the
+   start." sentence is gone; its place is the conditional `{address}` line. The
+   template's `You are {name}` is untouched, so the prompt still names the
+   speaker.
+4. `cli.py` — `_speaker` passes both names.
+
+Three things the sabotage checks caught that the tests as first written did not:
+
+- **The wiring test was circular.** It patched `_SPEAKER` with a fake reading
+  `loaded.briefing.user_name` back off the config — so it asserted the config
+  against itself and passed while `cli._speaker` passed the *wrong* name (proved
+  by flipping `user_name=loaded.briefing.name` and watching it stay green). The
+  real test patches `Speaker` instead, so the real `_speaker` runs and the fake
+  records the keywords it hands over.
+- **The address line swallowed the last headline.** `{headlines}{address}` with
+  a leading space read "...families in Nairobi The person you are speaking to is
+  called Sam" — the headline had eaten the instruction. Now it starts with a
+  newline, and the test asserts `"\nThe person you are speaking to is called
+  Sam"` rather than just `"Sam" in prompt`, which is what let it pass before.
+- **The greeting path was only half-sabotaged when I meant to break both.** A
+  first attempt flipped one `_greeting(self.name)` call and one test caught it;
+  the second call site was already correct, which is why the sabotage looks
+  partial in the record. Both are now pinned.
+
+`docs/AETHER_INTEGRATION.md` needed no change — it documents the IPC files and
+never the greeting. `make check` → 602 passed, 6 skipped; `make live` → 6 passed
+(the local Firecrawl was healthy, unrelated to this task but green).
+
 
 
 

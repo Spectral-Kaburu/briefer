@@ -88,11 +88,21 @@ class DedupConfig(BaseModel):
 
 
 class BriefingConfig(BaseModel):
-    """Briefing mode's own settings (SPEC section 6)."""
+    """Briefing mode's own settings (SPEC section 6).
+
+    Two names, one direction each: `name` is the assistant the briefing is
+    *from* (the prompt's "You are {name}"), and `user_name` is the person it is
+    *to* — the greeting, and the prompt's instruction to address them. It used
+    to be a single field defaulting to "Aether", so the greeting greeted the
+    assistant (the T5.4 incident, fixed in T8.5).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    #: Who the briefing addresses, read aloud once at the start.
+    #: Who the briefing addresses. Empty by default: nobody is named until the
+    #: owner says who, and the assistant's own name never stands in for them.
+    user_name: str = ""
+    #: Who is speaking. Never used in the greeting.
     name: str = "Aether"
 
 

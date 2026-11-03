@@ -63,6 +63,12 @@ timeouts:
   # Pause before the one local retry SPEC allows for a transient 5xx.
   transient_backoff_s: 0.5
 
-# Briefing mode: who the spoken briefing addresses.
+# Briefing mode: who the spoken briefing is from, and who it addresses.
 briefing:
+  # Who the briefing speaks to. Empty by default, which makes a run that cannot
+  # be synthesised say "Good morning." and nothing more; set a name here and it
+  # says "Good morning, <name>." instead. The assistant's own name never fills
+  # this, so a degraded briefing never greets itself.
+  user_name: ""
+  # Who the briefing is from, used by the synthesis prompt only.
   name: Aether

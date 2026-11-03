@@ -21,14 +21,16 @@ import typing as t
 
 import pytest
 
-from briefing.synth import PLAIN_GREETING, ResearchSynth, Speaker
+from briefing.synth import NO_NAME_GREETING, ResearchSynth, Speaker
 
 # Every test here awaits, so the marker is module-wide rather than 13 copies.
 pytestmark = pytest.mark.asyncio
 
 HEADLINES = ["Bank raises the lending rate", "Flooding displaces families in Nairobi"]
 SESSION = "Yesterday we deployed the briefing service."
-GREETING = "Good morning, Aether."
+#: The fallback greeting with nobody configured (T8.5). It used to be "Good
+#: morning, Aether." — the assistant greeting itself, which is the T5.4 incident.
+GREETING = "Good morning."
 
 
 class FakeClient:
@@ -53,8 +55,11 @@ class FakeClient:
 def speaker(client: t.Any, **kwargs: t.Any) -> Speaker:
     """A Speaker named Aether, over the given fake Gemini.
 
-    The fake is passed straight to `Speaker`: it depends on `generate`, not on
-    the `Gemini` class, so no wrapper stands between the test and the behaviour.
+    `user_name` is deliberately left out of the defaults: T8.5 made it the only
+    thing that puts a name in the greeting, so a test that wants a named greeting
+    must ask for one. The fake is passed straight to `Speaker`: it depends on
+    `generate`, not on the `Gemini` class, so no wrapper stands between the test
+    and the behaviour.
     """
     base = {"name": "Aether", "session_summary": SESSION}
     base.update(kwargs)
@@ -137,7 +142,75 @@ async def test_the_models_text_is_trimmed() -> None:
     assert briefing.text == "a briefing"
 
 
-# --- the fallback (SPEC section 6) ----------------------------------------
+# --- the greeting's name (T8.5) -------------------------------------------
+
+
+async def test_the_greeting_names_nobody_by_default() -> None:
+    """The T5.4 regression test, and the whole point of T8.5.
+
+    `briefing.name` defaults to "Aether", and it used to fill the greeting too,
+    so a briefing that could not be synthesised greeted itself: "Good morning,
+    Aether." Aether is the assistant; the greeting must name nobody unless the
+    owner says who it addresses.
+    """
+    client = FakeClient(raises=RuntimeError("down"))
+    briefing = await speaker(client).briefing(HEADLINES)
+    assert briefing.text == GREETING
+    assert "Aether" not in briefing.text
+
+
+async def test_the_greeting_names_the_person_when_configured() -> None:
+    """`user_name` is the one thing that puts a name in the greeting."""
+    client = FakeClient(raises=RuntimeError("down"))
+    briefing = await speaker(client, user_name="Sam").briefing(HEADLINES)
+    assert briefing.text == "Good morning, Sam."
+
+
+async def test_a_whitespace_user_name_is_no_name() -> None:
+    """`user_name: "  "` is unset, not a name that is two spaces long.
+
+    Saying "Good morning,  ." reads as a comma and a pause, which is worse than
+    not attempting the name at all.
+    """
+    client = FakeClient(raises=RuntimeError("down"))
+    briefing = await speaker(client, user_name="   ").briefing(HEADLINES)
+    assert briefing.text == GREETING
+
+
+async def test_the_prompt_names_the_person_only_when_configured() -> None:
+    """The prompt's name slot is the person's, and it is empty otherwise.
+
+    The template asks the model to address the person by name; given no name it
+    would invent one, so the instruction must go too, not just the value.
+    """
+    client = FakeClient()
+    await speaker(client, user_name="Sam").briefing(HEADLINES)
+    named = client.prompts[0]
+    assert "Sam" in named
+    # On its own line, not appended to the last headline: the template joins the
+    # two, and a leading space read "...families in Nairobi The person you are
+    # speaking to is called Sam" — the headline had swallowed the instruction.
+    assert "\nThe person you are speaking to is called Sam" in named
+
+    client = FakeClient()
+    await speaker(client).briefing(HEADLINES)
+    unnamed = client.prompts[0]
+    assert "Sam" not in unnamed
+    assert "by name" not in unnamed
+
+
+async def test_the_assistant_name_is_still_the_prompts_own_name() -> None:
+    """Separating the two must not cost the prompt its speaker.
+
+    `briefing.name` is who the briefing is *from*; `user_name` is who it is
+    *to*. Only the latter changed here.
+    """
+    client = FakeClient()
+    await speaker(client, user_name="Sam").briefing(HEADLINES)
+    prompt = client.prompts[0]
+    assert "Aether" in prompt
+    assert "Sam" in prompt
+    assert prompt.index("Aether") < prompt.index("Sam")
 
 
 async def test_a_client_that_raises_falls_back_to_the_greeting() -> None:
@@ -180,13 +253,18 @@ async def test_a_client_that_returns_only_whitespace_falls_back() -> None:
 
 
 async def test_a_briefing_with_no_name_still_speaks() -> None:
-    """An unconfigured name is not a reason to say nothing at all."""
+    """An unconfigured name is not a reason to say nothing at all.
+
+    This used to assert `PLAIN_GREETING.format(name="")`, i.e. the degenerate
+    "Good morning, ." — a spoken comma and a pause. T8.5 removed that case
+    outright: no name means no name clause.
+    """
     client = FakeClient()
     briefing = await speaker(client, name="").briefing(HEADLINES)
     assert briefing.text == "Good morning. Here is your briefing."
 
     empty = await speaker(client, name="").briefing([])
-    assert empty.text == PLAIN_GREETING.format(name="")
+    assert empty.text == NO_NAME_GREETING
 
 
 async def test_a_fallback_is_still_a_speakable_briefing() -> None:

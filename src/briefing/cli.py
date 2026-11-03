@@ -81,8 +81,13 @@ def _audio(loaded: Config) -> FileAudioState:
 
 
 def _speaker(loaded: Config, session_summary: str = "") -> Speaker:
-    """The real speaker: Gemini for the text, name and session around it."""
-    return Speaker(Gemini(), name=loaded.briefing.name, session_summary=session_summary)
+    """The real speaker: Gemini for the text, both names and the session."""
+    return Speaker(
+        Gemini(),
+        name=loaded.briefing.name,
+        user_name=loaded.briefing.user_name,
+        session_summary=session_summary,
+    )
 
 
 def _summarizer(loaded: Config) -> ResearchSynth:

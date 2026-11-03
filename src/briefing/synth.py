@@ -5,6 +5,12 @@ owner can reword the briefing without a code change. It is read per call, not at
 import: an edit takes effect on the next run, and an edit never breaks a running
 process.
 
+Two names, one direction each: `name` is who the briefing is *from* (the
+assistant, which the prompt's "You are {name}" needs) and `user_name` is who it
+is *to* — the greeting and the prompt's "address them" instruction. They were
+one field, whose default named the assistant as both, so a briefing that could
+not be synthesised greeted itself (T5.4); that is T8.5's fix.
+
 `google-genai` is imported lazily and only by the real client, so a `briefing
 run` with the extra uninstalled still produces its plain greeting instead of
 failing at import (SPEC section 6's failure fallback).
@@ -22,8 +28,12 @@ from pathlib import Path
 
 PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "prompts" / "briefing.txt"
 
-#: What a model that cannot answer is replaced with. `{name}` is filled per run,
-#: so an unconfigured name degrades to "Good morning, ." — see `_greeting`.
+#: A briefing with nobody to address. The whole greeting when `user_name` is
+#: unset (T8.5) — "Good morning, ." reads as a comma and a pause, which is worse
+#: than not attempting the name at all.
+NO_NAME_GREETING = "Good morning."
+
+#: The same greeting with the person named. `{name}` is filled per run.
 PLAIN_GREETING = "Good morning, {name}."
 
 
@@ -40,9 +50,25 @@ class SpokenBriefing:
     fallback: bool
 
 
-def _greeting(name: str) -> str:
-    """The plain greeting, with the name when there is one to use."""
-    return PLAIN_GREETING.format(name=name.strip())
+def _greeting(user_name: str) -> str:
+    """The plain greeting, naming the person only when there is one to name."""
+    stripped = user_name.strip()
+    if not stripped:
+        return NO_NAME_GREETING
+    return PLAIN_GREETING.format(name=stripped)
+
+
+def _address_line(user_name: str) -> str:
+    """The prompt's name instruction, or nothing when nobody is named.
+
+    An empty line rather than an empty value: the template asks the model to
+    address the person by name, and a model told to do that with no name
+    invents one (T8.5).
+    """
+    stripped = user_name.strip()
+    if not stripped:
+        return ""
+    return f"\nThe person you are speaking to is called {stripped} — refer to them by name."
 
 
 def load_prompt() -> str:
@@ -99,9 +125,19 @@ class Speaker:
     way produce the same briefing.
     """
 
-    def __init__(self, gemini: t.Any, *, name: str = "", session_summary: str = "") -> None:
+    def __init__(
+        self,
+        gemini: t.Any,
+        *,
+        name: str = "",
+        user_name: str = "",
+        session_summary: str = "",
+    ) -> None:
         self.gemini = gemini
+        #: Who the briefing is from (the assistant), used by the prompt only.
         self.name = name
+        #: Who it is to. The greeting and the prompt's address instruction.
+        self.user_name = user_name
         self.session_summary = session_summary
 
     def prompt(self, headlines: t.Sequence[str]) -> str:
@@ -109,7 +145,10 @@ class Speaker:
         template = load_prompt()
         joined = "\n".join(f"- {headline}" for headline in headlines)
         return template.format(
-            name=self.name, session_summary=self.session_summary, headlines=joined
+            name=self.name,
+            session_summary=self.session_summary,
+            headlines=joined,
+            address=_address_line(self.user_name),
         )
 
     async def briefing(self, headlines: t.Sequence[str]) -> SpokenBriefing:
@@ -120,10 +159,10 @@ class Speaker:
         news (SPEC section 6's "if all fetching fails, plain session greeting").
         """
         if not headlines:
-            return SpokenBriefing(_greeting(self.name), fallback=True)
+            return SpokenBriefing(_greeting(self.user_name), fallback=True)
         text = await _generate(self.gemini, lambda: self.prompt(headlines))
         if text is None:
-            return SpokenBriefing(_greeting(self.name), fallback=True)
+            return SpokenBriefing(_greeting(self.user_name), fallback=True)
         return SpokenBriefing(text, fallback=False)
 
 

@@ -111,6 +111,26 @@ def test_paths_overridable_for_tests(tmp_path: t.Any) -> None:
     assert cfg.paths.seen_headlines == tmp_path / "seen_headlines.json"
 
 
+def test_the_greeting_name_defaults_to_empty() -> None:
+    """T8.5: nobody is addressed until the owner says who.
+
+    The old default was "Aether", which made a degraded briefing greet itself
+    (the T5.4 incident): the assistant's name is who speaks, not who listens.
+    """
+    assert load_config().briefing.user_name == ""
+
+
+def test_the_greeting_name_is_overridable(tmp_path: t.Any) -> None:
+    path = tmp_path / "briefing.yaml"
+    path.write_text("briefing:\n  user_name: Sam\n", encoding="utf-8")
+    assert load_config(path).briefing.user_name == "Sam"
+
+
+def test_the_assistant_name_keeps_its_own_default() -> None:
+    """The prompt still names the speaker, so the field keeps its default."""
+    assert load_config().briefing.name == "Aether"
+
+
 # --- bad input --------------------------------------------------------------
 
 
