@@ -1308,6 +1308,22 @@ a new untracked `.claude/settings.json` (4459 bytes) is on disk and unchanged. P
 CLAUDE.md I do not edit `.claude/settings*.json`, so I neither re-added it nor
 touched it — restore or commit it however you prefer.
 
+## T8.1 — 2026-11-03 · PLAN.md box ticked (verification only)
+
+Previous session implemented the guard and wrote the T8.1 section; the PLAN.md
+box had simply never been flipped. Re-verified against `5d65fe2` (post-T8.2) on
+2026-11-03:
+
+- `tests/conftest.py` and `tests/test_isolation.py` both present.
+- `pytest tests/test_isolation.py` → **10 passed**. The five acceptance areas
+  (subprocess, socket, DNS, a broad `except` that cannot swallow the block, and
+  the live marker passing through) each have a named test; the one that asserts
+  the fixture lets `live` through does so against the fixture's own source.
+- `make check` green at the time of ticking, so the guard has not regressed
+  under T8.2's changes.
+
+No code changed here. Ticked, not re-implemented.
+
 ## T8.2 — 2026-11-03 · backup-search adapter, live run flake explained
 
 `make live` failed twice in the owner's run and again in this one, on
