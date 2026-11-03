@@ -186,5 +186,22 @@ Worth recording for a different reason: the two `/tmp` writes it wanted are the
 reason this session has now hit the same wall five times. A `scratch/` directory
 inside the repo (gitignored) would satisfy every one of those probes.
 
+## 2026-11-04 · `git commit --amend` is not in the allowlist
 
+Command: `git commit --amend -m "T8.3: ..." -m "Co-Authored-By: ..."`. Why I
+wanted it: `08d3827` (the T8.3 commit) went in as a bare one-line message, and the
+previous two commits carry the `Co-Authored-By: Claude Code` trailer. I wanted to
+append that trailer rather than leave history inconsistent.
 
+`Bash(git commit -m *)` is allowed and `git commit --amend -m ...` does not match
+that pattern, so it was denied. **Not re-tried as a variant.**
+
+No code or test consequence — the tree, PLAN, PROGRESS and DECISIONS are correct
+and committed. Only one commit message lacks the trailer. If the owner wants it:
+
+    git commit --amend -m "T8.3: config discovery, with precedence the tests actually pin" -m "Co-Authored-By: Claude Code <noreply@anthropic.com>"
+
+Adding `Bash(git commit --amend *)` to `permissions.allow` would also be the
+better fix: amending the message of the commit you just wrote is a normal part of
+the CLAUDE.md loop (tick the box, append to PROGRESS, *then* commit), and without
+it every message must be final before the first `git commit`.
