@@ -5,12 +5,19 @@ Table-driven per CLAUDE.md: one row per documented behaviour.
 
 from __future__ import annotations
 
+import os
 import typing as t
 from pathlib import Path
 
 import pytest
 
-from briefing.config import ConfigError, load_config, resolve_api_key
+from briefing.config import (
+    ConfigError,
+    default_config_path,
+    discover_config,
+    load_config,
+    resolve_api_key,
+)
 
 # --- defaults ---------------------------------------------------------------
 
@@ -128,10 +135,109 @@ def test_malformed_yaml_raises_config_error(tmp_path: t.Any) -> None:
         load_config(path)
 
 
-def test_missing_file_falls_back_to_defaults() -> None:
-    """A named-but-absent config file is not fatal; defaults still load."""
-    cfg = load_config(None)
-    assert cfg.search.results == 10
+def test_no_file_loads_pure_defaults() -> None:
+    """`load_config(None)` stays free of file reads, so discovery has to live
+    somewhere else (T8.3)."""
+    assert load_config(None).search.results == 10
+
+
+def test_an_explicit_missing_path_is_an_error(tmp_path: t.Any) -> None:
+    """T8.3: `--config ~/briefing.yaml` with a typo must not silently become
+    defaults — the owner would run on the wrong config and never know."""
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(tmp_path / "nope.yaml")
+    message = excinfo.value.message
+    assert "does not exist" in message
+    assert "nope.yaml" in message
+    # The fix hint must say what to do, not just what went wrong (SPEC section 3).
+    assert excinfo.value.hint
+
+
+# --- discovery (T8.3) ------------------------------------------------------
+
+
+def test_the_env_var_names_the_config_file(tmp_path: t.Any) -> None:
+    """`$BRIEFING_CONFIG` outranks the platformdirs location."""
+    named = tmp_path / "named.yaml"
+    named.write_text("search:\n  results: 11\n", encoding="utf-8")
+    monkey = {"BRIEFING_CONFIG": str(named)}
+    assert discover_config(monkey) == named
+
+
+def test_the_env_var_outranks_a_default_that_is_also_present(
+    monkeypatch: t.Any, tmp_path: t.Any
+) -> None:
+    """Both files on disk: `$BRIEFING_CONFIG` wins and the loser is never read.
+
+    The two tests either side of this one have only a single file present, so both
+    pass no matter which order `discover_config` tries the candidates in — proven
+    by sabotaging it to try the default first, which they did not catch. This one
+    puts both on disk and asserts the *values* differ, so the winner is proven.
+    """
+    named = tmp_path / "named.yaml"
+    named.write_text("search:\n  results: 11\n", encoding="utf-8")
+    default = tmp_path / "briefing" / "config.yaml"
+    default.parent.mkdir(parents=True)
+    default.write_text("search:\n  results: 12\n", encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("BRIEFING_CONFIG", str(named))
+    chosen = discover_config(os.environ)
+    assert chosen == named
+    assert load_config(chosen).search.results == 11
+
+
+def test_the_user_config_dir_is_the_fallback(monkeypatch: t.Any, tmp_path: t.Any) -> None:
+    """The default location, with `XDG_CONFIG_HOME` pointing the test at tmp."""
+    default = tmp_path / "briefing" / "config.yaml"
+    default.parent.mkdir(parents=True)
+    default.write_text("search:\n  results: 12\n", encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.delenv("BRIEFING_CONFIG", raising=False)
+    assert discover_config(os.environ) == default
+
+
+def test_no_file_found_is_none_not_an_error(monkeypatch: t.Any, tmp_path: t.Any) -> None:
+    """A fresh install has no config file, and that is not an error."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.delenv("BRIEFING_CONFIG", raising=False)
+    assert discover_config(os.environ) is None
+
+
+def test_no_owner_config_is_visible_to_a_test() -> None:
+    """Canary for conftest's `_no_owner_config`.
+
+    Asserted on the mechanism rather than on the absence of the owner's file,
+    because this machine has no `~/.config/briefing/config.yaml` and so a bare
+    "is None" would pass even with the fixture deleted. Between this fixture
+    moving `XDG_CONFIG_HOME` under `tmp_path` and
+    `test_the_user_config_dir_is_the_fallback` proving discovery follows XDG,
+    discovery cannot reach the owner's directory.
+    """
+    xdg = os.environ.get("XDG_CONFIG_HOME", "")
+    assert xdg, "conftest must redirect XDG_CONFIG_HOME for every test"
+    resolved = default_config_path()
+    assert str(resolved).startswith(xdg), f"{resolved} is outside the redirected {xdg}"
+    assert discover_config(os.environ) is None
+
+
+def test_a_stale_env_var_falls_through_to_the_default_path(
+    monkeypatch: t.Any, tmp_path: t.Any
+) -> None:
+    """A `$BRIEFING_CONFIG` that no longer exists must not brick every command:
+    it falls through to the platformdirs path, exactly like a missing one."""
+    default = tmp_path / "briefing" / "config.yaml"
+    default.parent.mkdir(parents=True)
+    default.write_text("search:\n  results: 13\n", encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("BRIEFING_CONFIG", str(tmp_path / "gone.yaml"))
+    assert discover_config(os.environ) == default
+
+
+def test_an_empty_env_var_is_not_a_path(monkeypatch: t.Any, tmp_path: t.Any) -> None:
+    """`BRIEFING_CONFIG=""` is unset, not a reference to ""."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("BRIEFING_CONFIG", "")
+    assert discover_config(os.environ) is None
 
 
 def test_shipped_example_config_loads() -> None:

@@ -507,12 +507,19 @@ def test_a_results_value_below_one_is_a_clean_error(monkeypatch: t.Any) -> None:
     assert "Traceback" not in result.stderr
 
 
-def test_a_named_config_file_that_is_absent_still_runs(monkeypatch: t.Any, tmp_path: t.Any) -> None:
-    """An explicitly named file that does not exist is not fatal (config.py)."""
+def test_a_named_config_file_that_is_absent_fails(monkeypatch: t.Any, tmp_path: t.Any) -> None:
+    """T8.3: a typo in `--config` must fail, not silently run on defaults.
+
+    This used to assert the opposite (exit 0). T8.3 reversed it on purpose: an
+    explicitly named file that does not exist is a `ConfigError`, so a typo
+    cannot quietly change which config the owner is running under.
+    """
     _configure(_report(), monkeypatch)
     missing = tmp_path / "no-such.yaml"
-    result = runner.invoke(app, ["research", "kenya news", "--config", str(missing)])
-    assert result.exit_code == 0, result.stderr
+    result = runner.invoke(app, ["research", "--config", str(missing), "kenya news"])
+    assert result.exit_code != 0
+    assert "Traceback" not in result.stderr
+    assert "no-such.yaml" in result.stderr
 
 
 # --- the extractor adapter -------------------------------------------------
@@ -831,6 +838,68 @@ def test_config_honours_an_explicit_file(monkeypatch: t.Any, tmp_path: t.Any) ->
     result = runner.invoke(app, ["config", "--config", str(source)])
     assert result.exit_code == 0, result.stderr
     assert "42" in result.stdout
+
+
+def test_config_says_which_file_is_in_force(monkeypatch: t.Any, tmp_path: t.Any) -> None:
+    """T8.3: `briefing config` must name the file, or say there is none."""
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.delenv("BRIEFING_CONFIG", raising=False)
+    result = runner.invoke(app, ["config"])
+    assert result.exit_code == 0, result.stderr
+    assert "none (built-in defaults)" in result.stdout
+
+
+def test_config_names_a_discovered_file(monkeypatch: t.Any, tmp_path: t.Any) -> None:
+    """A discovered file is in force, and `briefing config` must show it."""
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    source = tmp_path / "briefing" / "config.yaml"
+    source.parent.mkdir(parents=True)
+    source.write_text("search:\n  results: 42\n", encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.delenv("BRIEFING_CONFIG", raising=False)
+    result = runner.invoke(app, ["config"])
+    assert result.exit_code == 0, result.stderr
+    assert str(source) in result.stdout
+    assert "42" in result.stdout
+
+
+def test_config_says_how_to_create_one(monkeypatch: t.Any, tmp_path: t.Any) -> None:
+    """Saying "none (built-in defaults)" is only actionable if it says what to do."""
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.delenv("BRIEFING_CONFIG", raising=False)
+    result = runner.invoke(app, ["config"])
+    assert "briefing.yaml.example" in result.stdout
+
+
+def test_a_broken_discovered_file_fails_cleanly(monkeypatch: t.Any, tmp_path: t.Any) -> None:
+    """A file nobody typed on the command line must still fail loudly, and must
+    name the file so the owner knows which one to fix."""
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    source = tmp_path / "briefing" / "config.yaml"
+    source.parent.mkdir(parents=True)
+    source.write_text("news_topics: 5\n", encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.delenv("BRIEFING_CONFIG", raising=False)
+    result = runner.invoke(app, ["config"])
+    assert result.exit_code != 0
+    assert "Traceback" not in result.stderr
+    # The path is wrapped mid-string by the error renderer, so join it before
+    # asserting: a split path would otherwise not match.
+    assert "briefing/config.yaml" in result.stderr.replace("\n", "")
+    assert "news_topics" in result.stderr
+
+
+def test_an_explicit_missing_path_is_not_silently_defaults(
+    monkeypatch: t.Any, tmp_path: t.Any
+) -> None:
+    """The other half of T8.3: a typo in `--config` must not run on defaults."""
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    result = runner.invoke(app, ["config", "--config", str(tmp_path / "gone.yaml")])
+    assert result.exit_code != 0
+    assert "Traceback" not in result.stderr
+    assert "gone.yaml" in result.stderr
 
 
 # --- a broken config file is every command's problem (spec §3) --------------

@@ -1376,5 +1376,52 @@ The instance was healthy at the end of this session, so the T8.2 live acceptance
 should expect the skip to fire whenever Docker's engines are unhappy. Re-run
 `make live` after a skip; a genuine break still fails.
 
+## T8.3 — 2026-11-04 · config discovery, and the precedence test that was vacuous
+
+T0.4 shipped a config *file* the README told the owner to copy, and no code path
+ever read it unless `--config` was typed. That is now closed.
+
+What landed:
+
+1. `config.py` — `discover_config(env)` and `default_config_path()`. Pure
+   function of its argument, tried in order: `$BRIEFING_CONFIG`, then
+   `user_config_dir("briefing")/config.yaml`, then `None`. Only a file that
+   *exists* is returned, so a missing default is silent and a stale env var falls
+   through rather than bricking every command. `load_config(None)` still reads
+   nothing, so D16's original observation stands and the pre-existing tests stay
+   honest.
+2. `config.py` — `load_config(path)` now raises `ConfigError` when `path` is
+   given and does not exist. `tests/test_cli.py`'s
+   `test_a_named_config_file_that_is_absent_still_runs` asserted the opposite;
+   it was rewritten as `..._fails` with the reason recorded in its docstring,
+   because a typo in `--config` must not silently run under different settings.
+3. `cli.py` — `_config_file(config, env)` picks `--config` ahead of discovery,
+   `_load()` is otherwise unchanged so D15's single guard still catches a
+   malformed *discovered* file, and `briefing config` names the file in force or
+   "none (built-in defaults)" plus the copy hint.
+4. `tests/conftest.py` — autouse `_no_owner_config` moves `XDG_CONFIG_HOME`
+   under `tmp_path` and clears `BRIEFING_CONFIG` for **every** test, so no test
+   can read a real `~/.config/briefing`. Pinned by
+   `test_no_owner_config_is_visible_to_a_test`, which asserts on the redirect
+   mechanism (`default_config_path().is_relative_to(xdg)`) rather than on this
+   machine's absence of a config file, so the canary still fails if the fixture
+   is deleted — checked by sabotaging the fixture to `return None` before the
+   `setenv`, which made it fail as intended.
+
+**The construction worth remembering.** All four precedence tests passed, so I
+sabotaged `discover_config` to try the default path *before* the env var — and
+they still passed. Each test had only one of the two files on disk, so the
+*tests* never pinned the order; they pinned only "each location is read".
+`test_the_env_var_outranks_a_default_that_is_also_present` now writes both with
+different values and asserts the loaded `search.results` is the env var's. It
+fails under that sabotage, which is what lets me say precedence is real.
+
+`briefing config --init` was skipped: PLAN marks it "Extra, not required", and
+the copy hint already tells the owner where to put the file.
+
+Not done here: T8.4's region default, T8.5's `user_name`, and the README's
+config-discovery section (T8.8) still describe the explicit-only world.
+
+
 
 

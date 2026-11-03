@@ -28,6 +28,7 @@ import pty
 import socket
 import subprocess
 import typing as t
+from pathlib import Path
 
 import pytest
 
@@ -218,6 +219,19 @@ def _restore() -> None:
 def _is_live(request: pytest.FixtureRequest) -> bool:
     """True when the test is marked `live` and may reach the real network."""
     return bool(request.node.get_closest_marker("live"))
+
+
+@pytest.fixture(autouse=True)
+def _no_owner_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """T8.3: point config discovery at a tmp dir so no test reads the owner's.
+
+    `discover_config` reads `$BRIEFING_CONFIG` then `platformdirs`, which resolves
+    to `~/.config/briefing` — a real file the owner may have. Without this, a
+    `runner.invoke(app, ["config"])` in any test would silently load it and make
+    the suite depend on the machine.
+    """
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.delenv("BRIEFING_CONFIG", raising=False)
 
 
 @pytest.fixture(autouse=True)

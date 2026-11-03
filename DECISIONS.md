@@ -153,6 +153,23 @@ fix. **Open question for T6.x**, not a defect: should `briefing config` report
 "no config file in use" so the owner knows defaults are in play? Logged rather
 than built, because nothing in SPEC asks for it.
 
+**CLOSED by T8.3 (2026-11-04)** — the explicit-only decision is reversed. The
+README told the owner to copy `config/briefing.yaml.example` into place, and
+that file did nothing unless the path was typed on every command: a documented
+file that is inert is worse than no documentation. Discovery now runs, in
+order: `--config PATH`, then `$BRIEFING_CONFIG`, then
+`<platformdirs user_config_dir>/briefing/config.yaml`, then built-in defaults.
+
+The asymmetry with D15's `load_config(path)` guard is deliberate and is the one
+thing worth keeping: a path the owner *typed* that does not exist is a
+`ConfigError`, because a typo must never silently run on different settings than
+intended, while a *discovered* file that is absent is silent, because a fresh
+install must not error. `load_config(None)` still reads nothing from disk, so
+the observation above stands and the existing tests stay honest — discovery is a
+separate pure function, `discover_config(env)`, called by the CLI's `_load()`.
+`briefing config` answers the open question directly, naming the file in force or
+"none (built-in defaults)" plus how to create one.
+
 ## D17 — 2026-11-01 · `Speaker` depends on `generate`, not on the `Gemini` class (T5.3)
 
 The synthesis needs one async method, and `Gemini` (the SDK wrapper) is the only

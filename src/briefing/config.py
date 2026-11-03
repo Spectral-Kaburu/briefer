@@ -12,7 +12,11 @@ import typing as t
 from pathlib import Path
 
 import yaml
+from platformdirs import user_config_dir
 from pydantic import BaseModel, ConfigDict, ValidationError
+
+#: The environment variable that names a config file (T8.3).
+CONFIG_PATH_ENV = "BRIEFING_CONFIG"
 
 
 class ConfigError(Exception):
@@ -157,33 +161,67 @@ def _build_paths(state_dir: Path) -> Paths:
     )
 
 
+def default_config_path() -> Path:
+    """Where a discovered config file lives: `<user config dir>/briefing/config.yaml`.
+
+    `platformdirs` follows XDG on Linux and the platform equivalent elsewhere, so
+    `XDG_CONFIG_HOME` moves it — which is how the tests point it at a tmp dir
+    rather than at the owner's real directory.
+    """
+    return Path(user_config_dir("briefing")) / "config.yaml"
+
+
+def discover_config(env: t.Mapping[str, str]) -> Path | None:
+    """The config file in force when `--config` was not given, or `None`.
+
+    Precedence (T8.3): `$BRIEFING_CONFIG`, then the platformdirs default. Only a
+    file that *exists* is returned, so a missing default is silent (a fresh
+    install must not error) and a stale `$BRIEFING_CONFIG` falls through instead
+    of bricking every command.
+
+    Reading the env mapping in keeps this a pure function of its argument, so the
+    CLI passes `os.environ` and a test passes a dict.
+    """
+    named = env.get(CONFIG_PATH_ENV, "").strip()
+    candidates = [Path(named).expanduser()] if named else []
+    candidates.append(default_config_path())
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def load_config(path: Path | None = None, state_dir: Path | None = None) -> Config:
     """Load config from YAML at `path`, layered over the defaults.
 
     Raises ConfigError with a fix hint when the file is unreadable, malformed, or
     contains a field that is not part of the schema (which usually means a typo).
+
+    `path is None` means "no file, defaults only" and reads nothing from disk —
+    discovery is `discover_config`'s job, so this stays cheap to call.
     """
     data: dict[str, t.Any] = {}
     if path is not None:
         if not path.exists():
-            # A named-but-absent file is not fatal: defaults still load.
-            data = {}
-        else:
-            try:
-                loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
-            except yaml.YAMLError as exc:
-                raise ConfigError(
-                    f"Config file {path} is not valid YAML.",
-                    "Fix the syntax error reported by the parser, or delete the file to use defaults.",
-                ) from exc
-            if loaded is None:
-                loaded = {}
-            if not isinstance(loaded, dict):
-                raise ConfigError(
-                    f"Config file {path} must contain a YAML mapping, got {type(loaded).__name__}.",
-                    "Top-level entries should look like `news_topics: [...]`, not a bare list.",
-                )
-            data = loaded
+            raise ConfigError(
+                f"Config file {path} does not exist.",
+                "Check the path, or drop --config to use the built-in defaults.",
+            )
+        try:
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as exc:
+            raise ConfigError(
+                f"Config file {path} is not valid YAML.",
+                "Fix the syntax error reported by the parser, or delete the file to use defaults.",
+            ) from exc
+        if loaded is None:
+            loaded = {}
+        if not isinstance(loaded, dict):
+            raise ConfigError(
+                f"Config file {path} must contain a YAML mapping, got {type(loaded).__name__}.",
+                "Top-level entries should look like `news_topics: [...]`, not a bare list.",
+            )
+        data = loaded
 
     if state_dir is None:
         state_dir = _default_state_dir()

@@ -23,7 +23,14 @@ import typer
 from rich.console import Console
 
 from briefing.briefing import DedupStore, FileAudioState, FileSessionSummary, Gate, TopicFilter
-from briefing.config import Config, ConfigError, load_config, resolve_api_key
+from briefing.config import (
+    Config,
+    ConfigError,
+    default_config_path,
+    discover_config,
+    load_config,
+    resolve_api_key,
+)
 from briefing.deliver import DeliveryError, SubprocessRunner, deliver
 from briefing.extract import Extracted, extract
 from briefing.fetch.api import ApiFirecrawl, usage_today
@@ -347,7 +354,10 @@ def show_config(
 ) -> None:
     """Show the effective config and where it lives."""
     loaded = _load(config_file)
+    in_force = _config_file(config_file)
     lines = [
+        "config file " + (str(in_force) if in_force is not None else "none (built-in defaults)"),
+        (f"           copy config/briefing.yaml.example to {default_config_path()} to set one"),
         f"state dir   {loaded.paths.state_dir}",
         f"whitelist   {loaded.paths.whitelist}",
         f"log file    {loaded.paths.log_file}",
@@ -535,7 +545,19 @@ def _mode_for(news: bool, web: bool) -> str | None:
     return None
 
 
-def _load(config: str | None) -> Config:
+def _config_file(config: str | None, env: t.Mapping[str, str] = os.environ) -> Path | None:
+    """Which config file is in force, or `None` for built-in defaults (T8.3).
+
+    `--config` wins and must exist; without it, `discover_config` looks at
+    `$BRIEFING_CONFIG` and then the platformdirs default, and only ever returns a
+    file that exists.
+    """
+    if config is not None:
+        return Path(config).expanduser()
+    return discover_config(env)
+
+
+def _load(config: str | None, env: t.Mapping[str, str] = os.environ) -> Config:
     """Load the config, turning a ConfigError into a clean exit.
 
     Every command goes through here, so the SPEC §3 promise (plain-English error
@@ -543,10 +565,7 @@ def _load(config: str | None) -> Config:
     rather than only for `research`.
     """
     try:
-        return load_config(
-            Path(config).expanduser() if config is not None else None,
-            state_dir=_STATE_DIR(),
-        )
+        return load_config(_config_file(config, env), state_dir=_STATE_DIR())
     except ConfigError as exc:
         _fail(exc.message, exc.hint)
 
