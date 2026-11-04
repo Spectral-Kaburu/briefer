@@ -91,23 +91,38 @@ class Gemini:
 
     The SDK is imported inside `generate`: the extra is optional, and a briefing
     that cannot reach a model must still fall back rather than die at import.
+
+    The key is read from the environment variable specified by `api_key_env`
+    (default `GEMINI_API_KEY`), not from `GOOGLE_API_KEY` which the SDK would
+    otherwise use. This prevents the SDK's precedence rules from surprising users.
     """
 
-    def __init__(self, *, model: str = "gemini-2.5-flash", max_output_tokens: int = 200) -> None:
+    def __init__(
+        self,
+        *,
+        model: str = "gemini-2.5-flash",
+        max_output_tokens: int = 200,
+        api_key_env: str = "GEMINI_API_KEY",
+    ) -> None:
         self.model = model
         self.max_output_tokens = max_output_tokens
+        self.api_key_env = api_key_env
         self._client: t.Any = None
 
     async def generate(self, prompt: str) -> str | None:
         """The model's text for `prompt`, or None when it produced none.
 
-        The key comes from the environment via the SDK's own client, which is
-        what keeps a secret out of this process's arguments and config file.
+        The key comes from the configured environment variable via the SDK's
+        explicit `api_key` parameter, so `GOOGLE_API_KEY` precedence cannot
+        surprise anyone.
         """
+        import os
+
         from google import genai  # lazy: the extra is optional (pyproject)
 
+        api_key = os.environ.get(self.api_key_env, "")
         if self._client is None:
-            self._client = genai.Client()
+            self._client = genai.Client(api_key=api_key if api_key else None)
         response = await self._client.aio.models.generate_content(
             model=self.model,
             contents=prompt,

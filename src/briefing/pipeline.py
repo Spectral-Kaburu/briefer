@@ -233,7 +233,9 @@ class Pipeline:
                     hit,
                     rank,
                     fetched,
-                    await self._summarize(fetched, url=hit.url, search_title=hit.title, query=query),
+                    await self._summarize(
+                        fetched, url=hit.url, search_title=hit.title, query=query
+                    ),
                 )
             self._emit(
                 Event(

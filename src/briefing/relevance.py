@@ -2,25 +2,87 @@
 
 BM25-style scoring with fuzzy matching for typo-tolerant query matching.
 """
+
 from __future__ import annotations
 
 import re
 
 # Stop words that are removed during scoring
 _STOP_WORDS = {
-    "the", "a", "an", "of", "in", "on", "for", "to", "and", "or", "with",
-    "by", "at", "from", "is", "are", "was", "were", "be", "been", "as",
-    "it", "its", "this", "that", "these", "those", "but", "not", "no",
-    "just", "only", "also", "have", "has", "had", "do", "does", "did",
-    "will", "would", "could", "should", "may", "might", "must",
-    "i", "you", "he", "she", "we", "they", "what", "which", "who",
-    "when", "where", "why", "how", "am", "being",
+    "the",
+    "a",
+    "an",
+    "of",
+    "in",
+    "on",
+    "for",
+    "to",
+    "and",
+    "or",
+    "with",
+    "by",
+    "at",
+    "from",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "as",
+    "it",
+    "its",
+    "this",
+    "that",
+    "these",
+    "those",
+    "but",
+    "not",
+    "no",
+    "just",
+    "only",
+    "also",
+    "have",
+    "has",
+    "had",
+    "do",
+    "does",
+    "did",
+    "will",
+    "would",
+    "could",
+    "should",
+    "may",
+    "might",
+    "must",
+    "i",
+    "you",
+    "he",
+    "she",
+    "we",
+    "they",
+    "what",
+    "which",
+    "who",
+    "when",
+    "where",
+    "why",
+    "how",
+    "am",
+    "being",
 }
 
 # Query words that benefit from digit/date matching
 _DATE_RELEVANT_WORDS = {
-    "version", "release", "latest", "current", "price", "date",
-    "when", "how many", "how much",
+    "version",
+    "release",
+    "latest",
+    "current",
+    "price",
+    "date",
+    "when",
+    "how many",
+    "how much",
 }
 
 # Fuzzy matching threshold for 5+ letter tokens
@@ -114,9 +176,9 @@ def score_chunk(chunk: str, query: str, url: str = "") -> float:
             total_score += 0.8  # Slight penalty for fuzzy
             matched_tokens += 1
 
-    # Boost for digits/dates when query contains relevant words
+    # Boost for digits/dates when query contains relevant words AND there are matched tokens
     query_has_date_relevance = any(word in query.lower() for word in _DATE_RELEVANT_WORDS)
-    if query_has_date_relevance:
+    if query_has_date_relevance and matched_tokens > 0:
         # Count digits in chunk as a relevance signal
         digit_count = sum(c.isdigit() for c in chunk)
         total_score += digit_count * 0.1
@@ -125,7 +187,7 @@ def score_chunk(chunk: str, query: str, url: str = "") -> float:
     chunk_len = len(chunk_tokens)
     if chunk_len == 0:
         return 0.0
-    return total_score / (chunk_len ** 0.5)  # BM25-style length normalization
+    return total_score / (chunk_len**0.5)  # BM25-style length normalization
 
 
 def split_into_chunks(text: str, sentences: int = 3) -> list[str]:

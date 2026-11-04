@@ -87,6 +87,21 @@ class DedupConfig(BaseModel):
     schedule_window_hours: int = 24
 
 
+class GeminiConfig(BaseModel):
+    """Gemini LLM configuration (T9.4).
+
+    Extends the LLM config with API key environment variable and model selection.
+    Mirrors `firecrawl.api.key_env` pattern.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Environment variable holding the Gemini API key (default: GEMINI_API_KEY).
+    api_key_env: str = "GEMINI_API_KEY"
+    #: The model to use for generation (default: gemini-2.5-flash).
+    model: str = "gemini-2.5-flash"
+
+
 class BriefingConfig(BaseModel):
     """Briefing mode's own settings (SPEC section 6).
 
@@ -104,6 +119,8 @@ class BriefingConfig(BaseModel):
     user_name: str = ""
     #: Who is speaking. Never used in the greeting.
     name: str = "Aether"
+    #: Gemini LLM configuration for --llm and --synth modes (T9.4).
+    gemini: GeminiConfig = GeminiConfig()
 
 
 class TimeoutsConfig(BaseModel):
@@ -257,4 +274,14 @@ def resolve_api_key(config: Config, env: t.Mapping[str, str]) -> str | None:
     need the key must raise their own error with a fix hint.
     """
     value = env.get(config.firecrawl.api.key_env, "")
+    return value or None
+
+
+def resolve_gemini_key(config: Config, env: t.Mapping[str, str]) -> str | None:
+    """Read the Gemini API key from the environment at call time.
+
+    Returns None when the variable is absent or empty — callers that actually
+    need the key must raise their own error with a fix hint.
+    """
+    value = env.get(config.briefing.gemini.api_key_env, "")
     return value or None

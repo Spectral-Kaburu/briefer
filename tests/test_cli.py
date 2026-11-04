@@ -236,6 +236,33 @@ def test_json_has_no_answer_field_without_synth(monkeypatch: t.Any) -> None:
     assert "answer" not in json.loads(result.stdout)
 
 
+def test_llm_warns_when_gemini_key_missing(monkeypatch: t.Any) -> None:
+    """T9.4: missing Gemini key produces a warning, not a crash."""
+    _configure(_report(), monkeypatch)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    result = runner.invoke(app, ["research", "bank rate", "--llm"])
+    assert result.exit_code == 0, result.stderr
+    assert "No Gemini API key found" in result.stderr
+    assert "Gemini API key" in result.stderr
+    assert (
+        "using extractive summary" in result.stderr.lower() or "fallback" in result.stderr.lower()
+    )
+    # Still produces output (extractive summary)
+    assert "1 found" in result.stdout
+
+
+def test_synth_warns_when_gemini_key_missing(monkeypatch: t.Any) -> None:
+    """T9.4: missing Gemini key produces a warning, not a crash."""
+    _configure(_report(), monkeypatch)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    result = runner.invoke(app, ["research", "bank rate", "--synth"])
+    assert result.exit_code == 0, result.stderr
+    assert "No Gemini API key found" in result.stderr
+    assert "Gemini API key" in result.stderr
+    # Still produces output (cards without synthesized answer)
+    assert "1 found" in result.stdout
+
+
 # --- the -r shorthand ----------------------------------------------------
 
 
@@ -678,7 +705,8 @@ def test_status_reports_every_check_spec_section_3_names(
     assert result.exit_code == 0, result.stderr
     lowered = result.stdout.lower()
     assert "local firecrawl" in lowered
-    assert "api key" in lowered
+    assert "firecrawl key" in lowered
+    assert "gemini key" in lowered
     assert "ddgs" in lowered
     assert "api usage" in lowered
 
@@ -713,6 +741,30 @@ def test_status_says_the_key_is_present_without_printing_it(
     result = runner.invoke(app, ["status"])
     assert result.exit_code == 0, result.stderr
     assert "fc-secret-key-123" not in result.stdout
+    assert "set" in result.stdout.lower()
+
+
+def test_status_says_gemini_key_is_missing_and_names_the_env_var(
+    monkeypatch: t.Any, tmp_path: t.Any
+) -> None:
+    """T9.4: status reports Gemini key status."""
+    _status_env(monkeypatch, tmp_path)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    result = runner.invoke(app, ["status"])
+    assert result.exit_code == 0, result.stderr
+    assert "GEMINI_API_KEY" in result.stdout
+    assert "not set" in result.stdout.lower()
+
+
+def test_status_says_gemini_key_is_present_without_printing_it(
+    monkeypatch: t.Any, tmp_path: t.Any
+) -> None:
+    """T9.4: the Gemini key must never appear in output."""
+    _status_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret-key-456")
+    result = runner.invoke(app, ["status"])
+    assert result.exit_code == 0, result.stderr
+    assert "gemini-secret-key-456" not in result.stdout
     assert "set" in result.stdout.lower()
 
 
@@ -774,6 +826,26 @@ def test_the_key_never_reaches_the_log_file_or_the_json(
     cli_module.LOG.info("resolved key %s", "fc-secret-key-123")
     masked = (tmp_path / "briefing.log").read_text(encoding="utf-8")
     assert "fc-secret-key-123" not in masked
+    assert "***" in masked
+
+
+def test_the_gemini_key_never_reaches_the_log_file_or_the_json(
+    monkeypatch: t.Any, tmp_path: t.Any
+) -> None:
+    """T9.4: the Gemini key must be masked just like the Firecrawl key."""
+    _configure(_report(), monkeypatch)
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret-key-456")
+    result = runner.invoke(app, ["research", "kenya news", "--llm", "--verbose", "--json"])
+    assert result.exit_code == 0, result.stderr
+    log = (tmp_path / "briefing.log").read_text(encoding="utf-8")
+    assert "gemini-secret-key-456" not in log
+    assert "gemini-secret-key-456" not in result.stdout
+
+    # A leak through this same logger must be masked.
+    cli_module.LOG.info("resolved gemini key %s", "gemini-secret-key-456")
+    masked = (tmp_path / "briefing.log").read_text(encoding="utf-8")
+    assert "gemini-secret-key-456" not in masked
     assert "***" in masked
 
 

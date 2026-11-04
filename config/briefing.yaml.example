@@ -74,3 +74,9 @@ briefing:
   user_name: ""
   # Who the briefing is from, used by the synthesis prompt only.
   name: Aether
+  # Gemini LLM settings (T9.4): for --llm and --synth modes.
+  gemini:
+    # Environment variable holding the Gemini API key.
+    api_key_env: GEMINI_API_KEY
+    # The model to use for generation.
+    model: gemini-2.5-flash

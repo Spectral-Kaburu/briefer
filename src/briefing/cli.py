@@ -30,6 +30,7 @@ from briefing.config import (
     discover_config,
     load_config,
     resolve_api_key,
+    resolve_gemini_key,
 )
 from briefing.deliver import DeliveryError, SubprocessRunner, deliver
 from briefing.extract import Extracted, extract
@@ -128,15 +129,16 @@ LOG = get_logger("briefing.cli")
 def _configure_logging(loaded: Config, verbose: bool) -> None:
     """Turn the configured log file on, and stderr too when `--verbose`.
 
-    The key is resolved here because this is the one place that already has it:
-    `log.configure` filters it out of every record, so a future log line holding
-    the whole config (or an exception quoting a request) cannot leak it.
+    The keys are resolved here because this is the one place that already has them:
+    `log.configure` filters them out of every record, so a future log line holding
+    the whole config (or an exception quoting a request) cannot leak them.
     """
-    key = resolve_api_key(loaded, os.environ)
+    firecrawl_key = resolve_api_key(loaded, os.environ)
+    gemini_key = resolve_gemini_key(loaded, os.environ)
     configure_logging(
         log_file=loaded.paths.log_file,
         verbose=verbose,
-        secrets=[key] if key else [],
+        secrets=[k for k in (firecrawl_key, gemini_key) if k],
     )
 
 
@@ -314,7 +316,8 @@ async def _probe_ddgs() -> bool:
 def status() -> None:
     """Health check: local Firecrawl, API key, ddgs, and today's API usage."""
     loaded = _load(None)
-    key = resolve_api_key(loaded, os.environ)
+    firecrawl_key = resolve_api_key(loaded, os.environ)
+    gemini_key = resolve_gemini_key(loaded, os.environ)
     used = usage_today(loaded.paths.state_dir / "api-calls.jsonl")
     local_ok = asyncio.run(_local_firecrawl(loaded).health())
     ddgs_ok = _ddgs_reachable()
@@ -332,10 +335,16 @@ def status() -> None:
             else f"{loaded.firecrawl.local.base_url} is unreachable. Run: docker compose up -d",
         ),
         row(
-            "api key",
-            key is not None,
-            f"{loaded.firecrawl.api.key_env} is {'set' if key else 'not set'}"
-            + ("" if key else ". Set it to use the cloud API."),
+            "firecrawl key",
+            firecrawl_key is not None,
+            f"{loaded.firecrawl.api.key_env} is {'set' if firecrawl_key else 'not set'}"
+            + ("" if firecrawl_key else ". Set it to use the cloud API."),
+        ),
+        row(
+            "gemini key",
+            gemini_key is not None,
+            f"{loaded.briefing.gemini.api_key_env} is {'set' if gemini_key else 'not set'}"
+            + ("" if gemini_key else ". Set it to use --llm/--synth."),
         ),
         row("ddgs", ddgs_ok, "reachable" if ddgs_ok else "unreachable"),
         row(
@@ -387,6 +396,7 @@ def show_config(
             f" · prefer api {loaded.whitelist.prefer_api_for_whitelisted}"
         ),
         f"summary     {loaded.summary.mode} · {loaded.summary.sentences} sentences",
+        f"gemini      {loaded.briefing.gemini.model} · key env {loaded.briefing.gemini.api_key_env}",
         (
             f"dedup       {loaded.dedup.headline_ttl_days} day TTL"
             f" · {loaded.dedup.schedule_window_hours}h schedule window"
@@ -439,7 +449,13 @@ def _research(
     ui = None if json_out else UI(plain=plain)
     # Built only when a flag asks for it. Neither Gemini feature is on by default
     # (SPEC section 2), and a client that is never called is never built.
-    summarizer = _SUMMARIZER(loaded) if (llm or synth) else None
+    gemini_key = resolve_gemini_key(loaded, os.environ)
+    if (llm or synth) and not gemini_key:
+        typer.echo(
+            "No Gemini API key found (set GEMINI_API_KEY); using extractive summary.",
+            err=True,
+        )
+    summarizer = _SUMMARIZER(loaded) if (llm or synth) and gemini_key else None
     pipeline = _PIPELINE(
         searcher=searcher,
         router=_router(loaded, no_api, whitelist),
@@ -505,6 +521,12 @@ async def _briefing(loaded: Config, *, dry_run: bool) -> None:
     patches the seams instead of calling this directly, which is what keeps the
     whole graph — including `voice-tts` — off a real run.
     """
+    gemini_key = resolve_gemini_key(loaded, os.environ)
+    if not gemini_key:
+        typer.echo(
+            "No Gemini API key found (set GEMINI_API_KEY); using plain greeting.",
+            err=True,
+        )
     store = _DEDUP(loaded)
     gate = Gate(store, _AUDIO(loaded))
 

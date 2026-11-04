@@ -1963,8 +1963,32 @@ Implemented query-aware passage selection for the `-r` research command:
 
 All tests pass. `make check` → 637 passed, 6 skipped.
 
+## T9.4 — 2026-11-04 · Gemini key plumbing
 
+Implemented complete Gemini key plumbing per the acceptance criteria:
 
+1. **Updated `cli.py`**:
+   - Imported `resolve_gemini_key` from config
+   - `_configure_logging()` now resolves both Firecrawl and Gemini keys, passing both to the `SecretFilter` for masking in logs
+   - `_research()` warns when `--llm` or `--synth` is used without a Gemini key: "No Gemini API key found (set GEMINI_API_KEY); using extractive summary."
+   - `_briefing()` warns when `briefing run` is used without a Gemini key: "No Gemini API key found (set GEMINI_API_KEY); using plain greeting."
+   - `status` command now shows two key rows: "firecrawl key" and "gemini key" with their respective status and env var names
 
+2. **Updated `config/briefing.yaml.example`**:
+   - Added `gemini` section under `briefing` with `api_key_env` (default GEMINI_API_KEY) and `model` (default gemini-2.5-flash)
 
+3. **Updated `show_config` command**:
+   - Displays `gemini` config line showing model and key env var
+
+4. **Added tests in `tests/test_cli.py`**:
+   - `test_llm_warns_when_gemini_key_missing`: verifies warning is printed to stderr, run still produces extractive output
+   - `test_synth_warns_when_gemini_key_missing`: verifies warning for synth mode
+   - `test_status_says_gemini_key_is_missing_and_names_the_env_var`: verifies status shows key status
+   - `test_status_says_gemini_key_is_present_without_printing_it`: verifies key is never exposed in output
+   - `test_the_gemini_key_never_reaches_the_log_file_or_the_json`: verifies SecretFilter masks Gemini key in logs
+
+5. **Fixed test `test_status_reports_every_check_spec_section_3_names`**:
+   - Updated to check for "firecrawl key" and "gemini key" instead of "api key"
+
+All tests pass. `make check` → 641 passed, 6 skipped.
 
