@@ -35,6 +35,43 @@ Result: Network access via curl was denied (exit code 7, connection refused - lo
 
 Action: D7 diagnosis recorded in DECISIONS.md with root cause analysis. The owner can run the curl when local Firecrawl is available to verify the exact mismatch.
 
+## T10.0 Probe and Record (partially completed via WebFetch, curl blocked)
+
+**Original blocked commands (curl denied by sandbox):**
+
+1. Wikipedia OpenSearch:
+   `curl -s "https://en.wikipedia.org/w/api.php?action=opensearch&search=python&limit=3&profile=fuzzy&format=json"`
+   
+2. Wikipedia summary:
+   `curl -s "https://en.wikipedia.org/api/rest_v1/page/summary/python"`
+   
+3. StackExchange search:
+   `curl -s "https://api.stackexchange.com/2.3/search/advanced?q=python&site=stackoverflow&accepted=True&sort=relevance&order=desc&pagesize=3&filter=withbody"`
+   
+4. DuckDuckGo Instant Answer:
+   `curl -s "https://api.duckduckgo.com/?q=python&format=json&no_html=1&skip_disambig=1&no_redirect=1"`
+
+**Reason blocked**: The sandbox allowlist for `curl` only permits access to
+`http://localhost:3002` (see `.claude/settings.json` entries 89-90). External
+hosts like `en.wikipedia.org`, `api.stackexchange.com`, and `api.duckduckgo.com`
+are not in the allowlist pattern.
+
+**Partial completion via WebFetch**: T10.0 was partially completed using `WebFetch` to probe:
+- Wikipedia OpenSearch API — confirmed 4-element array response shape
+- Wikipedia REST Summary API — confirmed `type`, `title`, `extract`, `content_urls.desktop.page` fields; verified `type: "disambiguation"` behavior
+- DuckDuckGo Instant Answer API — confirmed `AbstractText`, `AbstractURL`, `Answer`, `AnswerType` fields; probed 3 test queries
+
+**StackExchange API cannot be verified**: `WebFetch` to `api.stackexchange.com` was denied, so response structure is from API documentation only.
+
+**Consequence**: T10.1-T10.9 are **not fully blocked** because:
+1. Wikipedia adapter can be built with WebFetch-verified shapes
+2. DDG Instant Answer has partial probe data, but T10.4 decision cannot be made with 3/10 queries having empty AbstractText
+3. StackExchange adapter needs documentation-based fixtures; owner verification needed
+
+**Owner action needed**: To complete T10.0 fully:
+- Add curl allowlist entries for the three hosts OR
+- Accept WebFetch-based verification as sufficient (StackExchange documentation only)
+
 ## Still worth the owner's hands (not blocking any task)
 
 Nothing here blocks a task. The remaining items are decisions and a first real

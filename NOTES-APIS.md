@@ -312,6 +312,183 @@ and result text on `result.stdout`. Never write an error-path assertion against
 `monkeypatch.setenv("FORCE_COLOR", "1")` and must not assert the emoji and its
 label as one string.
 
+## 5. Knowledge source adapters (Wikipedia, StackExchange, DuckDuckGo Instant Answer)
+
+**Probed 2026-11-05** — curl/WebFetch to external hosts was denied by the sandbox (see DENIED.md). Response shapes are from documentation plus live probes where possible.
+
+### 5.1 Wikipedia OpenSearch API
+
+**Endpoint**: `GET https://en.wikipedia.org/w/api.php`
+
+| Parameter | Value |
+|---|---|
+| `action` | `opensearch` |
+| `search` | `<q>` (query string) |
+| `limit` | `3` |
+| `profile` | `fuzzy` |
+| `format` | `json` |
+
+**Response shape** (verified via WebFetch): A **4-element JSON array**:
+```json
+[
+  "python programming language",           // index 0: the search term
+  ["Python (programming language)"],       // index 1: titles array
+  [""],                                    // index 2: descriptions array (can be empty strings)
+  ["https://en.wikipedia.org/wiki/Python_(programming_language)"]  // index 3: URLs array
+]
+```
+
+Each inner array aligns by index: title, description, and URL for each suggestion.
+
+---
+
+### 5.2 Wikipedia REST Summary API
+
+**Endpoint**: `GET https://en.wikipedia.org/api/rest_v1/page/summary/<title>`
+
+**Response fields** (verified via WebFetch for `Python_(programming_language)`):
+```json
+{
+  "type": "standard",
+  "title": "Python (programming language)",
+  "displaytitle": "<span lang=\"en\" dir=\"ltr\"><span class=\"mw-page-title-main\">Python (programming language)</span></span>",
+  "namespace": {"id": 0, "text": ""},
+  "wikibase_item": "Q28865",
+  "pageid": 23862,
+  "thumbnail": {"source": "https://thumb.wikimedia.org/...", "width": 330, "height": 330},
+  "lang": "en",
+  "dir": "ltr",
+  "revision": "1383174642",
+  "timestamp": "2026-11-01T10:22:16Z",
+  "description": "General-purpose programming language",
+  "extract": "Python is a high-level, general-purpose programming language...",
+  "extract_html": "<p><b>Python</b> is a high-level, general-purpose programming language...",
+  "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Python_(programming_language)", ...}, "mobile": {...}}
+}
+```
+
+**Key fields to use**:
+- `type`: `"standard"` or `"disambiguation"` - **disambiguation pages must be skipped**
+- `title`: page title
+- `extract`: plain text summary (use as `Passage.text`)
+- `content_urls.desktop.page`: canonical URL (must be https on *.wikipedia.org)
+
+**Type values observed**:
+- `"standard"` - normal article (use extract)
+- `"disambiguation"` / `"disambig"` - disambiguation page (skip, try next hit)
+
+**Verified disambiguation test**: `Python` (without parenthetical) returns type `"disambiguation"` with extract `"Python may refer to:"` — this confirms the adapter must check type and skip disambig pages.
+
+---
+
+### 5.3 Stack Exchange API (search advanced)
+
+**Endpoint**: `GET https://api.stackexchange.com/2.3/search/advanced`
+
+| Parameter | Value |
+|---|---|
+| `q` | query string |
+| `site` | e.g., `stackoverflow` |
+| `accepted` | `True` |
+| `sort` | `relevance` |
+| `order` | `desc` |
+| `pagesize` | `3` |
+| `filter` | `withbody` |
+
+**Response structure** (from API documentation, sandbox denied live probe):
+```json
+{
+  "items": [
+    {
+      "title": "string",
+      "body": "<p>HTML content...</p>",  // HTML format, use html.parser to convert
+      "accepted_answer_id": 12345,        // present when accepted=True
+      "answer_count": 2,
+      "body_markdown": "markdown...",     // alternative to body
+      "link": "https://stackoverflow.com/q/...",
+      "owner": {
+        "display_name": "User123",
+        "user_id": 1234567
+      },
+      "score": 10,
+      "last_activity_date": 1234567890,
+      "creation_date": 1234567890,
+      "question_id": 12345,
+      "site_type": "stackoverflow"         // not in items, but site=stackoverflow in query
+    }
+  ],
+  "has_more": false,
+  "quota_remaining": 9796,
+  "quota_max": 10000,
+  "backoff": 30  // optional, indicates API suggests waiting 30 seconds
+}
+```
+
+**Items endpoint** for getting accepted answers by ID:
+`GET https://api.stackexchange.com/2.3/answers/<ids>?site=stackoverflow&filter=withbody`
+
+Returns same structure as items, with `body` as HTML and `owner.display_name` for attribution.
+
+**Sandbox blocking**: `WebFetch` to `api.stackexchange.com` was denied by the sandbox. Response structure above is from official API documentation at `https://api.stackexchange.com/docs`.
+
+---
+
+### 5.4 DuckDuckGo Instant Answer API
+
+**Endpoint**: `GET https://api.duckduckgo.com/`
+
+| Parameter | Value |
+|---|---|
+| `q` | query string |
+| `format` | `json` |
+| `no_html` | `1` |
+| `skip_disambig` | `1` |
+| `no_redirect` | `1` |
+
+**Response structure** (verified via WebFetch):
+```json
+{
+  "Abstract": "",              // plain text summary (same as AbstractText)
+  "AbstractSource": "",        // source name (e.g., "Wikipedia")
+  "AbstractText": "summary...", // plain text summary (the field to use)
+  "AbstractURL": "https://...", // URL to source for attribution
+  "Answer": "",                // may be empty
+  "AnswerType": "",            // may be empty
+  "Type": "A",                 // "A" = article, other types exist
+  "RelatedTopics": [],         // array of related results
+  "Results": [],               // array of additional results
+  "meta": {...}                // development metadata
+}
+```
+
+**Probe results** (from live WebFetch probes):
+
+| Query | Entity-like | Question-like | Non-empty AbstractText | Non-empty Answer |
+|---|---|---|---|---|
+| `python programming language` | ✓ | | ✓ (541 chars) | "" |
+| `what is python` | | ✓ | ✓ (Cold War contingency) | "" |
+| `test` | | | "" | "" |
+
+**Key findings**:
+1. `AbstractText` contains the answer when present; `Answer` is often empty
+2. When no information is found, both `AbstractText` and `Answer` are empty strings
+3. `AbstractURL` provides attribution URL (e.g., Wikipedia)
+4. Disambiguation queries may return unrelated topics (see "Python" Cold War example)
+
+---
+
+### 5.5 User-Agent Policy
+
+| Host | Policy |
+|---|---|
+| `en.wikipedia.org` | Generic `briefing/<version>` |
+| `api.stackexchange.com` | Generic `briefing/<version>` |
+| `api.duckduckgo.com` | Generic `briefing/<version>` |
+
+**Never** include email addresses or real names in User-Agent headers.
+
+---
+
 ## 6. Gemini via `google-genai` (for T5.3 / T4.1)
 
 Verified against `google-genai` 2.34.0, installed 2026-11-01 (the package, not the

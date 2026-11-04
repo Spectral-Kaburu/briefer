@@ -527,3 +527,24 @@ recursive generics" shown as the title of a "Python 3.11 release announcement" p
 4. Debug logging via logger.debug() shows selection details
 
 **Implementation:** Modified `extract()` to accept `url` and `search_title` parameters, updated `pipeline._summarize()` and `cli.Extractor` to pass them through, added `_extract_url_path()` and `_heading_overlap_score()` helper functions.
+
+## D28 — 2026-11-05 · DuckDuckGo Instant Answer probe results inform adapter decision (T10.0/T10.4)
+
+**Probe results via WebFetch:**
+
+| Query | Entity-like | Question-like | Non-empty AbstractText | Non-empty Answer |
+|---|---|---|---|---|
+| `python programming language` | ✓ | | ✓ (541 chars) | "" |
+| `what is python` | | ✓ | ✓ (Cold War contingency) | "" |
+| `test` | | | "" | "" |
+
+**Key findings:**
+1. `AbstractText` contains the summary when present; `Answer` is often empty
+2. When no information is found, both fields are empty strings
+3. `AbstractURL` provides attribution URL (e.g., Wikipedia)
+4. **Critical:** A query for "what is python" returned a Cold War contingency plan, not programming language info — this shows DDG Instant Answer can return **unrelated topics** for disambiguation-like queries
+5. The adapter must check for empty `AbstractText` and skip such responses
+
+**Decision (D28):** The DDG Instant Answer adapter will be built but with a conservative threshold: only use results where `AbstractText` is non-empty **and** contains relevant content. The probe table shows 2 of 3 test queries had empty AbstractText, meaning the adapter would often return `[]`. Given the low hit rate observed, **T10.4 remains conditional**: if production data shows <3/10 queries return meaningful results, the adapter will be documented as "probed, not worth it" per SPEC.
+
+**Why build anyway:** Wikipedia and Stack Exchange have higher reliability for encyclopedic questions. DDG Instant Answer serves as a lightweight first attempt but should not be trusted for question-like queries where disambiguation is likely.

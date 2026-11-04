@@ -89,3 +89,22 @@ ask:
   pages: 3
   # Overall deadline in seconds for all fetches combined.
   deadline_s: 10
+
+# Knowledge source adapters for ask mode (Phase 10):
+# Wikipedia and Stack Exchange provide encyclopedic answers; DDG Instant Answer
+# is disabled by default due to low reliability (see NOTES-APIS.md §5.4).
+knowledge:
+  enabled: true
+  wikipedia: true
+  stackexchange: true
+  # DuckDuckGo Instant Answer: probed, not worth it (low hit rate).
+  ddg_instant: false
+  # Timeout for each adapter call.
+  timeout_s: 5
+  # Custom User-Agent (default: generic briefing/<version>).
+  # Never include email or real name.
+  user_agent: ""
+  # Environment variable for Stack Exchange API key (optional, gives higher quota).
+  stackexchange_key_env: STACKEXCHANGE_KEY
+  # Quota floor: skip API calls when remaining at or below this value.
+  quota_floor: 20

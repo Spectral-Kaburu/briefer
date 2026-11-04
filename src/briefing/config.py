@@ -155,6 +155,32 @@ class AskConfig(BaseModel):
     deadline_s: float = 10.0
 
 
+class KnowledgeConfig(BaseModel):
+    """Knowledge source adapter configuration (Phase 10).
+
+    Controls which knowledge adapters are enabled and their settings.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Whether knowledge adapters are enabled (default: True).
+    enabled: bool = True
+    #: Enable Wikipedia adapter (default: True).
+    wikipedia: bool = True
+    #: Enable Stack Exchange adapter (default: True).
+    stackexchange: bool = True
+    #: Enable DuckDuckGo Instant Answer adapter (default: False).
+    ddg_instant: bool = False
+    #: Timeout in seconds for each adapter call (default: 5).
+    timeout_s: float = 5.0
+    #: Custom User-Agent (default: none, uses generic `briefing/<version>`).
+    user_agent: str = ""
+    #: Environment variable for Stack Exchange API key (default: STACKEXCHANGE_KEY).
+    stackexchange_key_env: str = "STACKEXCHANGE_KEY"
+    #: Quota floor below which Stack Exchange calls are skipped (default: 20).
+    quota_floor: int = 20
+
+
 class Paths(BaseModel):
     """Every file the CLI owns, all under the state dir so a test moves them all
     at once by overriding it."""
@@ -183,6 +209,7 @@ class Config(BaseModel):
     briefing: BriefingConfig = BriefingConfig()
     timeouts: TimeoutsConfig = TimeoutsConfig()
     ask: AskConfig = AskConfig()
+    knowledge: KnowledgeConfig = KnowledgeConfig()
     paths: Paths
 
 
