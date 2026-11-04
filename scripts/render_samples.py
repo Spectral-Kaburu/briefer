@@ -6,8 +6,8 @@ CLI writes — not an approximation of them. Run from the repo root:
 
     .venv/bin/python scripts/render_samples.py
 
-Each scenario is a hand-built `Report`, so nothing here touches the network, a
-search, or a fetch.
+Each scenario is a hand-built `Report` or `Answer`, so nothing here touches the
+network, a search, or a fetch.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from pathlib import Path
 
 from rich.console import Console
 
+from briefing.ask import Answer
 from briefing.fetch.router import ErrorClass, Method
 from briefing.pipeline import Event, Report, Result
 from briefing.ui import UI
@@ -48,6 +49,12 @@ What each scenario is for:
      other cards rendering.
   5. Long titles, long summaries, a long domain - the wrapping case.
 
+Ask mode scenarios (T9.7):
+
+  A1. Answered with sources - happy path with LLM
+  A2. No model available - passages only with warning
+  A3. Sources disagree - answer states disagreement
+  A4. Nothing found - clear error message
 """
 
 
@@ -200,6 +207,91 @@ SCENARIOS = {
 }
 
 
+# --- Ask mode scenarios (T9.7) ---
+
+ASK_SCENARIOS = {
+    "A1. Answered with sources (LLM available)": Answer(
+        question="What is the current Python version?",
+        text="Python 3.12 is the latest stable release, with Python 3.13 in development.",
+        used_llm=True,
+        sources=[
+            (
+                1,
+                "Python 3.12 Released",
+                "https://python.org/downloads/",
+                "python.org",
+                "LOCAL",
+                "Python 3.12 brought many improvements including the new type parameter syntax.",
+            ),
+            (
+                2,
+                "Python Release Schedule",
+                "https://python.org/devcycle/",
+                "python.org",
+                "LOCAL",
+                "Python 3.13 is currently in the development phase with planned October 2025 release.",
+            ),
+        ],
+        timings={"search": 0.45, "fetch": 1.23, "model": 0.89},
+        warnings=[],
+    ),
+    "A2. No model available (passages only)": Answer(
+        question="What is machine learning?",
+        text="""[1] Definition of ML
+Machine learning is a subset of artificial intelligence that enables computers to learn from data without being explicitly programmed.
+
+[2] Applications
+Applications include image recognition, natural language processing, and predictive analytics.""",
+        used_llm=False,
+        sources=[
+            (
+                1,
+                "Definition of ML",
+                "https://example.org/ml-basics",
+                "example.org",
+                "LOCAL",
+                "Machine learning is a subset of artificial intelligence that enables computers to learn from data without being explicitly programmed.",
+            ),
+            (
+                2,
+                "Applications",
+                "https://example.org/ml-apps",
+                "example.org",
+                "LOCAL",
+                "Applications include image recognition, natural language processing, and predictive analytics.",
+            ),
+        ],
+        timings={"search": 0.32, "fetch": 0.91},
+        warnings=["No Gemini API key found; returning passages only."],
+    ),
+    "A3. Sources disagree (clearly stated)": Answer(
+        question="What version of Python is stable?",
+        text="Sources disagree: python.org says 3.12.3 is the latest stable, while techcrunch.com says 3.13.0 was released.",
+        used_llm=True,
+        sources=[
+            (
+                1,
+                "Python 3.12.3 Released",
+                "https://python.org/downloads/",
+                "python.org",
+                "LOCAL",
+                "Python 3.12.3 is the latest stable release as of today.",
+            ),
+            (
+                2,
+                "Python 3.13 Ships Ahead of Schedule",
+                "https://techcrunch.com/2026/10/15/python-3-13",
+                "techcrunch.com",
+                "LOCAL",
+                "Python 3.13.0 was officially released on October 14, 2026, earlier than expected.",
+            ),
+        ],
+        timings={"search": 0.51, "fetch": 1.45, "model": 0.67},
+        warnings=[],
+    ),
+}
+
+
 def _finished(result: Result, total: int) -> Event:
     """The progress line the pipeline emits for one finished URL.
 
@@ -218,8 +310,94 @@ def _finished(result: Result, total: int) -> Event:
     )
 
 
+def _render_answer(answer: Answer, *, plain: bool = False) -> str:
+    """Render an Answer to a string (plain text mode, width 100).
+
+    This mirrors `_render_answer` from cli.py but returns a string.
+    """
+    from rich import box
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.text import Text
+
+    console = Console(record=True, width=100)
+    if plain:
+        console.no_color = True
+
+    # 1. Answer panel
+    answer_panel = Panel(
+        Text(answer.text),
+        title="Answer",
+        box=box.SIMPLE if plain else box.ROUNDED,
+        expand=True,
+    )
+    console.print(answer_panel)
+
+    # 2. Numbered source list
+    console.print()
+    for num, title, url, domain, method, text in answer.sources:
+        # Build method badge text
+        badge_text = f"[{method}]"
+
+        line = Text()
+        line.append(f"[{num}] ", "bold")
+        line.append(title or "(no title)")
+        line.append(f"  {badge_text}")
+        console.print(line)
+
+    # 3. Footer with timings and warnings
+    footer_parts = []
+
+    # Source counts by method
+    local_count = sum(1 for s in answer.sources if s[4] == "LOCAL")
+    api_count = sum(1 for s in answer.sources if s[4] == "API")
+    snippet_count = sum(1 for s in answer.sources if s[4] == "SNIPPET")
+
+    if local_count or api_count:
+        counts_parts = []
+        if local_count:
+            counts_parts.append(f"{local_count} local")
+        if api_count:
+            counts_parts.append(f"{api_count} API")
+        if snippet_count:
+            counts_parts.append(f"{snippet_count} snippet")
+        footer_parts.append(" · ".join(counts_parts))
+
+    if answer.used_llm:
+        method_desc = "LLM"
+    else:
+        method_desc = "passages"
+    footer_parts.append(f"{len(answer.sources)} sources ({method_desc})")
+
+    if answer.timings:
+        timing_parts = []
+        if "search" in answer.timings:
+            timing_parts.append(f"search: {answer.timings['search']:.2f}s")
+        if "fetch" in answer.timings:
+            timing_parts.append(f"fetch: {answer.timings['fetch']:.2f}s")
+        if "model" in answer.timings:
+            timing_parts.append(f"model: {answer.timings['model']:.2f}s")
+        if timing_parts:
+            footer_parts.append(" · " + " · ".join(timing_parts))
+
+    if answer.warnings:
+        footer_parts.append(" · " + "; ".join(answer.warnings))
+
+    if footer_parts:
+        footer_panel = Panel(
+            Text(" · ".join(footer_parts), "dim"),
+            box=box.SIMPLE,
+            expand=True,
+        )
+        console.print(footer_panel)
+
+    return console.export_text(clear=False)
+
+
 def main() -> str:
     chunks = [HEADER]
+
+    # Render research scenarios
     for label, report in SCENARIOS.items():
         for width in (100, 80):
             console = Console(record=True, width=width)
@@ -232,6 +410,19 @@ def main() -> str:
             chunks.append(f"{label}  [width {width}]")
             chunks.append("=" * width)
             chunks.append(console.export_text(clear=False))
+
+    # Render ask scenarios
+    chunks.append("\n" + "=" * 60)
+    chunks.append("ASK MODE SCENARIOS (T9.7)")
+    chunks.append("=" * 60 + "\n")
+
+    for label, answer in ASK_SCENARIOS.items():
+        output = _render_answer(answer, plain=False)
+        chunks.append("=" * 100)
+        chunks.append(f"{label}  [width 100]")
+        chunks.append("=" * 100)
+        chunks.append(output)
+
     text = "\n".join(chunks)
     OUT.write_text(text, encoding="utf-8")
     return text

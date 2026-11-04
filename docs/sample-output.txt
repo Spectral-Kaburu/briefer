@@ -23,6 +23,12 @@ What each scenario is for:
      other cards rendering.
   5. Long titles, long summaries, a long domain - the wrapping case.
 
+Ask mode scenarios (T9.7):
+
+  A1. Answered with sources - happy path with LLM
+  A2. No model available - passages only with warning
+  A3. Sources disagree - answer states disagreement
+  A4. Nothing found - clear error message
 
 ====================================================================================================
 1. All local, all good (the happy path)  [width 100]
@@ -256,3 +262,54 @@ What each scenario is for:
   3 found · 1 extracted (1 api) · whitelist +1                                  
   (very-long-domain-name-here.example.co.ke: 403 forbidden) · 5.0s              
                                                                                 
+
+
+============================================================
+ASK MODE SCENARIOS (T9.7)
+============================================================
+
+====================================================================================================
+A1. Answered with sources (LLM available)  [width 100]
+====================================================================================================
+╭───────────────────────────────────────────── Answer ─────────────────────────────────────────────╮
+│ Python 3.12 is the latest stable release, with Python 3.13 in development.                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+[1] Python 3.12 Released  [LOCAL]
+[2] Python Release Schedule  [LOCAL]
+                                                                                                    
+  2 local · 2 sources (LLM) ·  · search: 0.45s · fetch: 1.23s · model: 0.89s                        
+                                                                                                    
+
+====================================================================================================
+A2. No model available (passages only)  [width 100]
+====================================================================================================
+╭───────────────────────────────────────────── Answer ─────────────────────────────────────────────╮
+│ [1] Definition of ML                                                                             │
+│ Machine learning is a subset of artificial intelligence that enables computers to learn from     │
+│ data without being explicitly programmed.                                                        │
+│                                                                                                  │
+│ [2] Applications                                                                                 │
+│ Applications include image recognition, natural language processing, and predictive analytics.   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+[1] Definition of ML  [LOCAL]
+[2] Applications  [LOCAL]
+                                                                                                    
+  2 local · 2 sources (passages) ·  · search: 0.32s · fetch: 0.91s ·  · No Gemini API key found;    
+  returning passages only.                                                                          
+                                                                                                    
+
+====================================================================================================
+A3. Sources disagree (clearly stated)  [width 100]
+====================================================================================================
+╭───────────────────────────────────────────── Answer ─────────────────────────────────────────────╮
+│ Sources disagree: python.org says 3.12.3 is the latest stable, while techcrunch.com says 3.13.0  │
+│ was released.                                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+[1] Python 3.12.3 Released  [LOCAL]
+[2] Python 3.13 Ships Ahead of Schedule  [LOCAL]
+                                                                                                    
+  2 local · 2 sources (LLM) ·  · search: 0.51s · fetch: 1.45s · model: 0.67s                        
+                                                                                                    
