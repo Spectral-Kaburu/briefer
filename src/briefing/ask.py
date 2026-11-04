@@ -6,12 +6,15 @@ Knowledge adapters integration (T10.6).
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import logging
 import time
 import typing as t
 from datetime import UTC, datetime
 
+from briefing.knowledge.base import KnowledgeSource, Passage
+from briefing.knowledge.route import choose_sources
 from briefing.whitelist import normalize_host
 
 if t.TYPE_CHECKING:
@@ -90,16 +93,20 @@ async def ask(
     pages: int = 3,
     per_url_s: float = 8.0,
     deadline_s: float = 10.0,
+    knowledge_enabled: bool = True,
+    knowledge_adapters: list[KnowledgeSource] | None = None,
+    knowledge_config: t.Any = None,  # KnowledgeConfig for adapters
 ) -> Answer:
     """Answer a question using fetched pages.
 
     Flow:
-    1. Search with mode detection and region (same as -r)
-    2. Select pages by rank with at most one per normalized host
-    3. Fetch concurrently through the router, with timeout and deadline
-    4. Build evidence from each page (best passages + snippet)
-    5. Build prompt with numbered sources, date, disagreement instructions
-    6. Ask model, or return passages with warning if no model
+    1. Choose knowledge sources based on question
+    2. Start knowledge adapters concurrently with web search
+    3. Select pages by rank with at most one per normalized host
+    4. Merge knowledge and web sources with host de-duplication
+    5. Fetch concurrently through the router with deadline
+    6. Build prompt with numbered sources, date, disagreement instructions
+    7. Ask model, or return passages with warning if no model
 
     Returns an Answer with numbered sources, timings, and any warnings.
     Raises NoSearchResultsError when the search finds nothing.
@@ -108,9 +115,50 @@ async def ask(
     timings: dict[str, float] = {}
     warnings: list[str] = []
 
-    # 1. Search
+    # 1. Determine which knowledge sources to use
+    source_names = choose_sources(query) if knowledge_enabled else []
+
+    # Track when search starts for timing
     search_start = time.monotonic()
-    hits = await search(query)
+
+    # 2. Start knowledge adapter lookups and web search concurrently under one deadline
+    knowledge_passages: list[Passage] = []
+
+    # Prepare adapter tasks (handle None case)
+    adapter_lookup_tasks: list[asyncio.Task[list[Passage]]] = []
+    for adapter in knowledge_adapters or []:
+        if adapter.name.upper() in source_names:
+            adapter_lookup_tasks.append(asyncio.create_task(adapter.lookup(query, limit=1)))
+
+    # Start search as a task
+    search_task = asyncio.create_task(search(query))
+
+    # 3. Wait for all tasks (adapters + search) with a shared deadline
+    all_tasks = adapter_lookup_tasks + [search_task]
+    if all_tasks:
+        completed, pending = await asyncio.wait(
+            all_tasks,
+            timeout=deadline_s,
+            return_when=asyncio.ALL_COMPLETED,
+        )
+
+        # Cancel anything still pending after deadline
+        for task in pending:
+            task.cancel()
+
+        # Collect knowledge passages from completed adapter tasks
+        for task in adapter_lookup_tasks:
+            if task in completed:
+                try:
+                    results = task.result()
+                    if isinstance(results, list):
+                        knowledge_passages.extend(results[:1])  # At most one passage per adapter
+                except Exception:  # noqa: BLE001, S110
+                    pass  # Adapter failed, skip
+
+        # Get search results
+        hits = search_task.result() if search_task in completed else []
+
     timings["search"] = time.monotonic() - search_start
 
     if not hits:
@@ -119,8 +167,9 @@ async def ask(
             "Try a different query or check your network connection.",
         )
 
-    # 2. Select at most one result per normalized host
-    selected = _select_one_per_host(hits, max_pages=pages)
+    # 3. Select at most one result per normalized host (excluding knowledge source hosts)
+    knowledge_hosts = {p.domain for p in knowledge_passages if p.domain}
+    selected = _select_one_per_host(hits, max_pages=pages, excluded_hosts=knowledge_hosts)
 
     if not selected:
         raise NoSearchResultsError(
@@ -128,7 +177,16 @@ async def ask(
             "Try widening your query or checking the query spelling.",
         )
 
-    # 3. Fetch concurrently with deadline
+    # 4. Build evidence: knowledge passages first, then web sources
+    sources_data: list[EvidenceSource] = []
+    source_idx = 1
+
+    # Add knowledge passages first
+    for passage in knowledge_passages:
+        sources_data.append(_passage_to_evidence(passage, source_idx))
+        source_idx += 1
+
+    # 5. Fetch concurrently with deadline
     fetch_start = time.monotonic()
     fetched = await _fetch_with_deadline(
         selected,
@@ -140,12 +198,14 @@ async def ask(
     )
     timings["fetch"] = time.monotonic() - fetch_start
 
-    # 4. Build evidence from each page
-    sources_data: list[EvidenceSource] = []
-    for i, (hit, source) in enumerate(fetched, start=1):
+    # Add web sources after knowledge passages
+    for hit, source in fetched:
+        # Recalculate number accounting for knowledge sources
+        source.number = source_idx
         sources_data.append(source)
+        source_idx += 1
 
-    # 5. Build prompt and get answer
+    # 6. Build prompt and get answer
     prompt = _build_prompt(query, sources_data, resolve_clock)
 
     if model is None:
@@ -173,20 +233,28 @@ async def ask(
     )
 
 
-def _select_one_per_host(hits: list[SearchResult], max_pages: int) -> list[SearchResult]:
+def _select_one_per_host(
+    hits: list[SearchResult],
+    max_pages: int,
+    excluded_hosts: set[str] | None = None,
+) -> list[SearchResult]:
     """Select at most one result per normalized host, up to max_pages.
 
     Do not use the last two labels (co.ke would merge every Kenyan outlet);
     use full host normalization.
+
+    Excluded hosts are those already served by knowledge adapters, so they
+    are skipped to avoid duplication.
     """
     from briefing.whitelist import normalize_host
 
+    excluded = excluded_hosts or set()
     seen_hosts: set[str] = set()
     selected: list[SearchResult] = []
 
     for hit in hits[: max_pages * 2]:  # Look at enough to fill max_pages after dedup
         host = normalize_host(hit.url)
-        if host and host not in seen_hosts:
+        if host and host not in seen_hosts and host not in excluded:
             seen_hosts.add(host)
             selected.append(hit)
             if len(selected) >= max_pages:
@@ -317,3 +385,17 @@ def _render_passages(sources: list[EvidenceSource]) -> str:
         )
 
     return "No sources available to answer the query."
+
+
+def _passage_to_evidence(passage: Passage, number: int) -> EvidenceSource:
+    """Convert a Passage to an EvidenceSource for the prompt."""
+    return EvidenceSource(
+        number=number,
+        source=passage.title,
+        domain=passage.domain,
+        title=passage.title,
+        url=passage.url,
+        method=f"KG_{passage.domain}" if passage.domain else "KG_UNKNOWN",
+        text=passage.text,
+        snippet="",
+    )

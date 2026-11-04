@@ -187,6 +187,24 @@ async def _ask_implementation(
 
         model = _model
 
+    # Create knowledge adapters if enabled
+    knowledge_adapters: list = []
+    if loaded.knowledge.enabled:
+        from briefing.knowledge.stackexchange import StackExchangeAdapter
+        from briefing.knowledge.wikipedia import WikipediaAdapter
+
+        if loaded.knowledge.wikipedia:
+            wiki_adapter = WikipediaAdapter(loaded.knowledge)
+            knowledge_adapters.append(wiki_adapter)
+
+        if loaded.knowledge.stackexchange:
+            se_adapter = StackExchangeAdapter(
+                loaded.knowledge,
+                key=loaded.knowledge.stackexchange_key_env
+                and os.environ.get(loaded.knowledge.stackexchange_key_env),
+            )
+            knowledge_adapters.append(se_adapter)
+
     # Call the ask function from ask.py
     return await ask(
         query=query,
@@ -198,6 +216,9 @@ async def _ask_implementation(
         pages=pages,
         per_url_s=loaded.timeouts.per_url_s,
         deadline_s=loaded.ask.deadline_s,
+        knowledge_enabled=loaded.knowledge.enabled,
+        knowledge_adapters=knowledge_adapters if knowledge_adapters else None,
+        knowledge_config=loaded.knowledge,
     )
 
 

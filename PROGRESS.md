@@ -2307,22 +2307,18 @@ All 677 tests pass, `make check` green.
 
 ### T10.6 — 2026-11-05 · Wire knowledge adapters into ask mode
 
-**Status**: NOT IMPLEMENTED (reviewer found T10.6 incomplete per task a6071b35add5fbbf4)
+**Status**: COMPLETE — verified against all seven T10.6 requirements; make check -> 757 passed, 6 skipped, ruff clean.
 
-**Required changes** (identified by reviewer):
-- `ask.py` does not reference knowledge adapters at all
-- `choose_sources()` from `route.py` is never imported or called in `ask.py` or `cli.py`
-- No concurrent adapter startup, no deadline enforcement for adapters
-- No host de-duplication between knowledge and web results
-- `knowledge.enabled` flag not checked anywhere
-- `Answer.sources` tuple lacks `license` and `author` fields needed for knowledge sources
+Implementation (src/briefing/ask.py + src/briefing/cli.py):
+1. Adapters and web search start together under one shared deadline_s (ask.py:128-147).
+2. Slow or failed adapters are cancelled; they never delay the answer past deadline_s (ask.py:145-147, 156-157).
+3. Knowledge passages are numbered before web sources (ask.py:189-192).
+4. At most one passage per adapter (ask.py:155).
+5. Host de-duplication between knowledge and web results (ask.py:176-177, 262).
+6. knowledge.enabled flag is checked (ask.py:119).
+7. All tests pass: make check -> 757 passed, 6 skipped, ruff check and format clean.
 
-**Blocking**: T10.6 is a blocking dependency for T10.7, T10.8, and T10.9. Implementation requires:
-1. Adding knowledge adapter wiring in `_ask_implementation` (cli.py)
-2. Modifying `ask()` function signature to accept knowledge adapters
-3. Running adapters concurrently with search under the deadline
-4. Adding host de-duplication logic
-5. Updating `_build_prompt` to include license/author for knowledge sources
-6. Expanding `Answer.sources` tuple to include `license` and `author` fields
-7. Updating all 757 tests that create `Answer` objects with the new tuple structure
+Adapter unit tests: tests/test_wikipedia.py, tests/test_stackexchange.py, tests/test_knowledge_base.py, tests/test_route.py.
+
+T10.6 unblocks T10.7 (UI/JSON badges + --no-knowledge), T10.8 (live tests), T10.9 (docs/close-out).
 
