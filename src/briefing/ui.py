@@ -27,6 +27,9 @@ _BADGES: dict[Method, tuple[str, str, str]] = {
     Method.LOCAL: ("🟢", "LOCAL", "bold green"),
     Method.API: ("🟡", "API", "bold yellow"),
     Method.SNIPPET: ("⚪", "SNIPPET", "dim"),
+    Method.WIKI: ("📖", "WIKI", "cyan"),
+    Method.SO: ("💡", "SO", "blue"),
+    Method.DDGA: ("🤔", "DDGA", "magenta"),
 }
 # A page that is not ok and not snippet-only: extraction genuinely failed.
 _FAILED = ("🔴", "FAILED", "bold red")
@@ -81,6 +84,12 @@ def card(result: Result, *, plain: bool = False) -> Panel:
     # reason quoted from the target's own response body stays inert text.
     if result.warning:
         body.append(f"\n{result.warning}", "yellow")
+    # Show license for CC BY-SA content (Wikipedia, Stack Exchange)
+    if result.license:
+        body.append(f"\n{result.license}", "cyan")
+    # Show author for Stack Exchange answers
+    if result.author:
+        body.append(f"\nby {result.author}", "bright_black")
     # The summary is the body when there is one. A snippet-only page has no
     # summary, and its snippet is the whole result — dropping it would leave a
     # card that is a heading and a link with nothing read in between.

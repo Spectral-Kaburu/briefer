@@ -2322,3 +2322,18 @@ Adapter unit tests: tests/test_wikipedia.py, tests/test_stackexchange.py, tests/
 
 T10.6 unblocks T10.7 (UI/JSON badges + --no-knowledge), T10.8 (live tests), T10.9 (docs/close-out).
 
+## T10.7 — 2026-11-05 · UI and JSON (license/author fields)
+
+Fixed test failures in `tests/test_ask_cli.py` where source tuples in fake `Answer` objects only had 6 elements instead of the required 9 elements (n, title, url, domain, method, text, license, author, snippet).
+
+**What changed:**
+- Updated 5 test cases in `tests/test_ask_cli.py` to include empty strings for `license`, `author`, and `snippet` fields in source tuples
+- Tests now pass with the full 9-tuple structure expected by `cli.py:_render_answer()` and `cli.py:_answer_as_json()`
+
+**Verification:**
+- `make check` → 757 passed, 6 skipped, ruff clean
+- All ask mode CLI tests pass with the updated tuple structure
+
+**Files modified:**
+- `tests/test_ask_cli.py` (source tuple fixtures updated)
+

@@ -36,7 +36,17 @@ def test_ask_shorthand_works(monkeypatch: t.Any, tmp_path: t.Any) -> None:
         text="Python is a programming language.",
         used_llm=True,
         sources=[
-            (1, "Python 3.12", "https://python.org", "python.org", "LOCAL", "Content about Python")
+            (
+                1,
+                "Python 3.12",
+                "https://python.org",
+                "python.org",
+                "LOCAL",
+                "Content about Python",
+                "",
+                "",
+                "",
+            )
         ],
         timings={"search": 0.5, "fetch": 0.3, "model": 0.2},
         warnings=[],
@@ -65,7 +75,9 @@ def test_ask_subcommand_works(monkeypatch: t.Any, tmp_path: t.Any) -> None:
         question="What is Python?",
         text="Python is a programming language.",
         used_llm=True,
-        sources=[(1, "Python Guide", "https://python.org", "python.org", "LOCAL", "Content")],
+        sources=[
+            (1, "Python Guide", "https://python.org", "python.org", "LOCAL", "Content", "", "", "")
+        ],
         timings={"search": 0.5},
         warnings=[],
     )
@@ -287,6 +299,9 @@ def test_ask_json_output_format(monkeypatch: t.Any, tmp_path: t.Any) -> None:
                 "python.org",
                 "LOCAL",
                 "Python 3.12 brought many improvements.",
+                "",
+                "",
+                "",
             )
         ],
         timings={"search": 0.3, "fetch": 0.5, "model": 0.8},
@@ -326,7 +341,19 @@ def test_ask_rendered_output_shows_answer_and_sources(monkeypatch: t.Any, tmp_pa
         question="What is Python?",
         text="Python is a programming language.\n\n[1] Python Lang\npython.org",
         used_llm=True,
-        sources=[(1, "Python Lang", "https://python.org", "python.org", "LOCAL", "Content here")],
+        sources=[
+            (
+                1,
+                "Python Lang",
+                "https://python.org",
+                "python.org",
+                "LOCAL",
+                "Content here",
+                "",
+                "",
+                "",
+            )
+        ],
         timings={"search": 0.3, "fetch": 0.2, "model": 0.1},
         warnings=[],
     )
@@ -351,7 +378,9 @@ def test_ask_no_model_warning(monkeypatch: t.Any, tmp_path: t.Any) -> None:
         question="What is Python?",
         text="Python is a programming language.\n\n[1] Python Lang\npython.org",
         used_llm=False,
-        sources=[(1, "Python Lang", "https://python.org", "python.org", "LOCAL", "Content")],
+        sources=[
+            (1, "Python Lang", "https://python.org", "python.org", "LOCAL", "Content", "", "", "")
+        ],
         timings={"search": 0.3, "fetch": 0.2},
         warnings=["No Gemini API key found; returning passages only."],
     )

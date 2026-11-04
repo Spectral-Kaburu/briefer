@@ -136,6 +136,7 @@ async def _ask_implementation(
     time: str | None = None,
     pages: int = 3,
     no_api: bool = False,
+    no_knowledge: bool = False,
     config: str | None = None,
 ) -> Answer:
     """Build collaborators and call ask.ask (the real implementation).
@@ -187,9 +188,9 @@ async def _ask_implementation(
 
         model = _model
 
-    # Create knowledge adapters if enabled
+    # Create knowledge adapters if enabled (respect no_knowledge override)
     knowledge_adapters: list = []
-    if loaded.knowledge.enabled:
+    if loaded.knowledge.enabled and not no_knowledge:
         from briefing.knowledge.stackexchange import StackExchangeAdapter
         from briefing.knowledge.wikipedia import WikipediaAdapter
 
@@ -216,7 +217,7 @@ async def _ask_implementation(
         pages=pages,
         per_url_s=loaded.timeouts.per_url_s,
         deadline_s=loaded.ask.deadline_s,
-        knowledge_enabled=loaded.knowledge.enabled,
+        knowledge_enabled=loaded.knowledge.enabled and not no_knowledge,
         knowledge_adapters=knowledge_adapters if knowledge_adapters else None,
         knowledge_config=loaded.knowledge,
     )
@@ -234,6 +235,7 @@ def _ask(
     news: bool = False,
     web: bool = False,
     no_api: bool = False,
+    no_knowledge: bool = False,
     json_out: bool = False,
     plain: bool | None = None,
     config: str | None = None,
@@ -258,6 +260,7 @@ def _ask(
                 news=news,
                 web=web,
                 no_api=no_api,
+                no_knowledge=no_knowledge,
                 config=config,
             )
         )
@@ -298,22 +301,26 @@ def _render_answer(answer: Answer, *, plain: bool | None = None) -> None:
 
     # 2. Source cards - using the same UI as research mode
     # Filter out sources with no preview text (links with no previews are irrelevant)
+    # Tuple: (num, title, url, domain, method, text, license, author, snippet)
     sources_with_text = [
-        (num, title, url, domain, method, text)
-        for num, title, url, domain, method, text in answer.sources
+        (num, title, url, domain, method, text, license, author, snippet)
+        for num, title, url, domain, method, text, license, author, snippet in answer.sources
         if text  # Exclude sources with empty text
     ]
 
     if sources_with_text:
         console.print()
-        for rank, (num, title, url, domain, method, text) in enumerate(sources_with_text, start=1):
+        for rank, (num, title, url, domain, method, text, license, author, snippet) in enumerate(
+            sources_with_text, start=1
+        ):
             # Build a Result-like object for the card renderer
+            method_enum = Method[method] if isinstance(method, str) else method
             result = _AnswerResult(
                 rank=rank,
                 title=title,
                 url=url or "",
                 domain=domain,
-                method=Method[method],
+                method=method_enum,
                 heading=title,
                 summary=text,
                 ok=True,
@@ -321,6 +328,8 @@ def _render_answer(answer: Answer, *, plain: bool | None = None) -> None:
                 snippet=text,
                 source="",
                 warning=None,
+                license=license,
+                author=author,
             )
             console.print(card(result, plain=plain))
 
@@ -328,9 +337,13 @@ def _render_answer(answer: Answer, *, plain: bool | None = None) -> None:
     footer_parts = []
 
     # Source counts by method (count all sources, including those without text)
+    # Tuple: (num, title, url, domain, method, text, license, author, snippet)
     local_count = sum(1 for s in answer.sources if s[4] == "LOCAL")
     api_count = sum(1 for s in answer.sources if s[4] == "API")
     snippet_count = sum(1 for s in answer.sources if s[4] == "SNIPPET")
+    wiki_count = sum(1 for s in answer.sources if s[4] == "WIKI")
+    so_count = sum(1 for s in answer.sources if s[4] == "SO")
+    ddga_count = sum(1 for s in answer.sources if s[4] == "DDGA")
 
     if local_count or api_count or snippet_count:
         counts_parts = []
@@ -340,6 +353,12 @@ def _render_answer(answer: Answer, *, plain: bool | None = None) -> None:
             counts_parts.append(f"{api_count} API")
         if snippet_count:
             counts_parts.append(f"{snippet_count} snippet")
+        if wiki_count:
+            counts_parts.append(f"{wiki_count} wiki")
+        if so_count:
+            counts_parts.append(f"{so_count} so")
+        if ddga_count:
+            counts_parts.append(f"{ddga_count} ddga")
         footer_parts.append(" · ".join(counts_parts))
 
     if answer.used_llm:
@@ -392,6 +411,8 @@ class _AnswerResult:
         snippet: str,
         source: str,
         warning: str | None,
+        license: str = "",
+        author: str = "",
     ) -> None:
         self.rank = rank
         self.title = title
@@ -405,6 +426,8 @@ class _AnswerResult:
         self.snippet = snippet
         self.source = source
         self.warning = warning or ""
+        self.license = license
+        self.author = author
 
 
 def _answer_as_json(answer: Answer) -> dict[str, t.Any]:
@@ -421,6 +444,8 @@ def _answer_as_json(answer: Answer) -> dict[str, t.Any]:
                 "domain": s[3],
                 "method": s[4],
                 "passages": s[5],
+                "license": s[6],
+                "author": s[7],
             }
             for s in answer.sources
         ],
@@ -491,6 +516,11 @@ def main(
     ask_query: str | None = typer.Option(
         None, "-a", "--ask", "--instant", metavar="QUERY", help="Shorthand for `briefing ask`."
     ),
+    no_knowledge: bool = typer.Option(
+        False,
+        "--no-knowledge",
+        help="Disable knowledge source adapters (Wikipedia, Stack Exchange).",
+    ),
 ) -> None:
     """Research the web, or manage a briefing run."""
     # Check for mutually exclusive shorthand and subcommand (decision D12)
@@ -514,7 +544,7 @@ def main(
         raise typer.Exit()
     if ask_query is not None:
         # Ask mode shorthand: -a, --ask, or --instant
-        _ask(ask_query)
+        _ask(ask_query, no_knowledge=no_knowledge)
         raise typer.Exit()
     if ctx.invoked_subcommand is None:
         # `no_args_is_help` handles a bare `briefing`; reaching here means the
@@ -578,6 +608,9 @@ def ask(
     news: bool = typer.Option(False, "--news", help="Force news search mode."),
     web: bool = typer.Option(False, "--web", help="Force web search mode."),
     no_api: bool = typer.Option(False, "--no-api", help="Never call the Firecrawl API."),
+    no_knowledge: bool = typer.Option(
+        False, "--no-knowledge", help="Disable knowledge source adapters."
+    ),
     json_out: bool = typer.Option(False, "--json", help="Emit the answer as JSON."),
     plain: bool | None = typer.Option(None, "--plain/--no-plain", help="Plain text, no color."),
     verbose: bool = typer.Option(False, "--verbose", help="Log each decision to stderr."),
@@ -604,6 +637,7 @@ def ask(
         news=news,
         web=web,
         no_api=no_api,
+        no_knowledge=no_knowledge,
         json_out=json_out,
         plain=plain,
         config=config,

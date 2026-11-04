@@ -32,6 +32,9 @@ class Method(enum.Enum):
     LOCAL = "local"
     API = "api"
     SNIPPET = "snippet"
+    WIKI = "wiki"
+    SO = "so"
+    DDGA = "ddga"
 
 
 class FetchResult(t.NamedTuple):

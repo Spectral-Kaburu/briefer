@@ -69,6 +69,10 @@ class Result:
     error_class: ErrorClass = ErrorClass.OK
     #: Why this page degraded (SPEC section 4). Empty on a clean local success.
     warning: str = ""
+    #: License for CC BY-SA content (e.g., Wikipedia, Stack Exchange)
+    license: str = ""
+    #: Author for Stack Exchange answers
+    author: str = ""
 
 
 @dataclasses.dataclass

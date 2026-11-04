@@ -13,6 +13,7 @@ import time
 import typing as t
 from datetime import UTC, datetime
 
+from briefing.fetch.router import Method
 from briefing.knowledge.base import KnowledgeSource, Passage
 from briefing.knowledge.route import choose_sources
 from briefing.whitelist import normalize_host
@@ -49,7 +50,9 @@ class Answer:
     question: str
     text: str
     used_llm: bool
-    sources: list[tuple[int, str, str, str, str, str]]
+    sources: list[
+        tuple[int, str, str, str, str, str, str, str, str]
+    ]  # n, title, url, domain, method, text, license, author, snippet
     timings: dict[str, float]
     warnings: list[str]
 
@@ -63,13 +66,25 @@ class EvidenceSource:
     domain: str
     title: str
     url: str
-    method: str
+    method: Method | str
     text: str
     snippet: str
+    license: str = ""
+    author: str = ""
 
-    def as_tuple(self) -> tuple[int, str, str, str, str, str]:
+    def as_tuple(self) -> tuple[int, str, str, str, str, str, str, str, str]:
         """Return as tuple for Answer.sources."""
-        return (self.number, self.title, self.url, self.domain, self.method, self.text)
+        return (
+            self.number,
+            self.title,
+            self.url,
+            self.domain,
+            self.method.value if isinstance(self.method, Method) else self.method,
+            self.text,
+            self.license,
+            self.author,
+            self.snippet,
+        )
 
 
 class NoSearchResultsError(Exception):
@@ -313,7 +328,7 @@ async def _fetch_with_deadline(
             domain=normalize_host(hit.url),
             title=hit.title or "",
             url=hit.url or "",
-            method="LOCAL" if markdown else "SNIPPET",
+            method=Method.LOCAL if markdown else Method.SNIPPET,
             text=summary,
             snippet=hit.snippet or "",
         )
@@ -389,13 +404,22 @@ def _render_passages(sources: list[EvidenceSource]) -> str:
 
 def _passage_to_evidence(passage: Passage, number: int) -> EvidenceSource:
     """Convert a Passage to an EvidenceSource for the prompt."""
+    # Determine method based on domain/origin
+    if "wikipedia" in (passage.domain or "").lower():
+        method = Method.WIKI
+    elif "stackoverflow" in (passage.domain or "").lower():
+        method = Method.SO
+    else:
+        method = Method.DDGA  # Default for unknown knowledge sources
     return EvidenceSource(
         number=number,
         source=passage.title,
         domain=passage.domain,
         title=passage.title,
         url=passage.url,
-        method=f"KG_{passage.domain}" if passage.domain else "KG_UNKNOWN",
+        method=method,
         text=passage.text,
         snippet="",
+        license=passage.license,
+        author=passage.author,
     )
