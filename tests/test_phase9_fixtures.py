@@ -215,7 +215,6 @@ The actual content has proper sentences with periods."""
 # =============================================================================
 
 
-@pytest.mark.xfail(strict=True, reason="T9.2: heading may be unrelated to page")
 def test_d7_heading_unrelated_sanity_rule() -> None:
     """Heading should be relevant to the page content, not just any h1.
 
@@ -223,8 +222,8 @@ def test_d7_heading_unrelated_sanity_rule() -> None:
     'Fixed: type checker now handles recursive generics' appears as the
     heading for a 'Python 3.11 release announcement' page.
 
-    The fix (T9.2) will implement a sanity rule: a heading must have
-    word overlap with the URL, meta description, or search title.
+    T9.2 implements a sanity rule: a candidate heading with no word overlap
+    with the URL path or search title loses to one that does.
     """
     # Page about Python 3.11 release, but first h1 is changelog entry
     md = """# Fixed: type checker now handles recursive generics
@@ -232,12 +231,73 @@ def test_d7_heading_unrelated_sanity_rule() -> None:
 Python 3.11 has been released with significant performance improvements.
 The most notable new feature is the 10-15% speed boost across all workloads."""
 
-    result = extract(md, title=None, sentences=2)
-    # The heading should NOT be "Fixed: type checker..." because it's unrelated
-    # After T9.2, either heading is empty or mentions Python 3.11/release
+    # URL and search title indicate this is about Python 3.11 release
+    url = "https://example.com/python/3.11/release-notes/"
+    search_title = "Python 3.11 release announcement - Latest features"
+
+    result = extract(md, title=None, sentences=2, url=url, search_title=search_title)
+
+    # The heading should NOT be "Fixed: type checker..." because it has no overlap
+    # with the URL "python 3 11 release" or search title "python 3 11 release announcement"
+    # After T9.2, the heading should be empty (no h1 has overlap) or mention python/3.11
     assert result.heading != "Fixed: type checker now handles recursive generics"
+    # When no heading has overlap, should fall back to empty or search title
+    # The search title has overlap with URL, so it can be used as heading
+    assert result.heading in ("", "Python 3.11 release announcement - Latest features")
     # The answer about Python 3.11 should be in the summary
     assert "Python 3.11" in result.summary or "release" in result.summary.lower()
+
+
+def test_d7_metadata_title_with_overlap_is_used() -> None:
+    """When metadata title has word overlap with URL, it should be preferred over h1."""
+    md = """# Irrelevant navigation header
+
+Python 3.11 has been released with significant performance improvements."""
+
+    url = "https://example.com/python/3.11/"
+    search_title = "Python 3.11 features"
+
+    # Metadata title has overlap with URL (python, 311) and search title (python 3 11)
+    result = extract(
+        md, title="Python 3.11 Release Notes", sentences=2, url=url, search_title=search_title
+    )
+
+    # Should use metadata title because it has overlap
+    assert result.heading == "Python 3.11 Release Notes"
+
+
+def test_d7_h1_with_overlap_is_used_when_metadata_lacks_it() -> None:
+    """When h1 has overlap but metadata title doesn't, h1 should be used."""
+    md = """# Python 3.11 Performance Improvements
+
+Some intro text here that is a bit longer and provides context for the article."""
+
+    url = "https://example.com/python/version-history/"
+    search_title = "Version history page"
+
+    # Metadata title is empty, h1 has overlap with search_title (python, version)
+    # and URL has words that match h1 (python, 3, 11)
+    result = extract(md, title=None, sentences=2, url=url, search_title=search_title)
+
+    # Should use first h1 because it has overlap with URL/search_title
+    assert result.heading == "Python 3.11 Performance Improvements"
+
+
+def test_d7_no_overlap_falls_back() -> None:
+    """When no heading candidate has overlap, should fall back gracefully."""
+    md = """# Cryptic changelog entry
+
+Real content about a different topic entirely."""
+
+    url = "https://example.com/about/"
+    search_title = "About us page"
+
+    result = extract(md, title=None, sentences=2, url=url, search_title=search_title)
+
+    # No heading has overlap with URL/Search Title
+    # Should fall back to search_title (which has "about" overlap) or empty
+    # search_title="About us page" vs url="about" -> "about" overlaps
+    assert result.heading in ("", "About us page")
 
 
 # =============================================================================

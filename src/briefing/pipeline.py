@@ -228,7 +228,12 @@ class Pipeline:
             except Exception as exc:  # noqa: BLE001 - one bad URL never kills the run
                 result = _failed(hit, rank, ErrorClass.DEAD, str(exc))
             else:
-                result = _assembled(hit, rank, fetched, await self._summarize(fetched))
+                result = _assembled(
+                    hit,
+                    rank,
+                    fetched,
+                    await self._summarize(fetched, url=hit.url, search_title=hit.title),
+                )
             self._emit(
                 Event(
                     kind="finished",
@@ -285,7 +290,9 @@ class Pipeline:
                 warning=f"Timed out after {self.timeout_s}s.",
             )
 
-    async def _summarize(self, fetched: FetchResult) -> tuple[str, str]:
+    async def _summarize(
+        self, fetched: FetchResult, url: str = "", search_title: str = ""
+    ) -> tuple[str, str]:
         """Heading and summary from the router's markdown. Never raises.
 
         With a summarizer injected (`--llm`), its answer replaces the extractive
@@ -296,7 +303,12 @@ class Pipeline:
         if not fetched.markdown:
             return fetched.heading, fetched.summary
         try:
-            extracted = self.extractor.extract(fetched.markdown, url="")
+            extracted = self.extractor.extract(
+                fetched.markdown,
+                title=fetched.heading,
+                url=url,
+                search_title=search_title,
+            )
         except Exception:  # noqa: BLE001 - a bad extraction degrades to snippet
             return fetched.heading, fetched.summary
         heading, summary = _pair(extracted)

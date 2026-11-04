@@ -609,8 +609,20 @@ class Extractor:
     def __init__(self, sentences: int = 2) -> None:
         self.sentences = sentences
 
-    def extract(self, markdown: str, url: str = "") -> Extracted:
-        return extract(markdown, sentences=self.sentences)
+    def extract(
+        self,
+        markdown: str,
+        title: str | None = None,
+        url: str = "",
+        search_title: str = "",
+    ) -> Extracted:
+        return extract(
+            markdown,
+            title=title,
+            sentences=self.sentences,
+            url=url,
+            search_title=search_title,
+        )
 
 
 def _whitelist(loaded: Config) -> Whitelist:

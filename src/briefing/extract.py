@@ -7,8 +7,11 @@ this with an abstractive summary, so this stays the always-available fallback.
 
 from __future__ import annotations
 
+import logging
 import re
 import typing as t
+
+logger = logging.getLogger(__name__)
 
 # Lines that are pure navigation, cookie or paywall furniture rather than prose.
 _BOILERPLATE_LINE_MARKERS = (
@@ -189,18 +192,20 @@ def extract(
     markdown: str,
     title: str | None = None,
     sentences: int = 2,
+    url: str = "",
+    search_title: str = "",
 ) -> Extracted:
     """Extract a heading and an extractive summary from page content.
 
-    `title` is the metadata title, which wins over the first markdown h1. Both can
-    be absent, in which case the heading is empty and the summary stands alone.
+    `title` is the metadata title from the page, which wins over first h1 when
+    relevant. `url` and `search_title` are used for heading sanity rules (T9.2).
 
     A 320-character cap is applied as defense in depth (T9.1).
     """
     # Apply clean_markdown before extraction (T9.1)
     cleaned = clean_markdown(markdown)
 
-    heading = _clean(title or "") or _first_h1(cleaned)
+    heading, _ = _select_heading(cleaned, title or "", url, search_title)
     summary = _summarise(cleaned, sentences)
     # Apply cap as defense in depth
     if len(summary) > _SUMMARY_CAP_CHARS:
@@ -217,6 +222,179 @@ def _first_h1(markdown: str) -> str:
         if stripped.startswith("# ") and len(stripped) > 2:
             return _clean(stripped[2:])[:_HEADING_CHARS]
     return ""
+
+
+def _select_heading(
+    markdown: str,
+    metadata_title: str,
+    url: str,
+    search_title: str,
+) -> tuple[str, str]:
+    """Select the best heading using a sanity rule based on word overlap.
+
+    Candidates are evaluated for word overlap with URL path and search title:
+    1. Candidates WITH overlap are considered relevant
+    2. Among relevant candidates, pick the best-scored one
+    3. Priority order: metadata_title > first_h1 > search_title
+    4. If no candidate has overlap, fall back to empty string
+
+    Returns (heading, source_name) tuple for debug logging.
+    """
+    # Extract URL path for comparison (remove domain, keep words)
+    url_path = _extract_url_path(url)
+
+    # Build list of (heading, source) tuples with their overlap scores
+    candidates: list[tuple[str, str, float]] = []
+
+    if metadata_title:
+        score = _heading_overlap_score(metadata_title, url_path, search_title)
+        candidates.append((metadata_title, "metadata_title", score))
+
+    h1 = _first_h1(markdown)
+    if h1:
+        score = _heading_overlap_score(h1, url_path, search_title)
+        candidates.append((h1, "first_h1", score))
+
+    if search_title:
+        score = _heading_overlap_score(search_title, url_path, search_title)
+        candidates.append((search_title, "search_title", score))
+
+    if not candidates:
+        return "", "none"
+
+    # Determine minimum score for "having overlap" - a threshold to distinguish
+    # "some overlap" from "no meaningful overlap"
+    # A score > 0 means there's at least one word in common
+    MIN_OVERLAP_SCORE = 1.0  # At least one overlapping word
+
+    # First, try to find candidates with meaningful overlap
+    relevant = [(h, s, sc) for h, s, sc in candidates if sc >= MIN_OVERLAP_SCORE]
+
+    if relevant:
+        # Pick the best-relevant candidate, with priority tie-breaker
+        # Priority boost: ensures metadata_title > first_h1 > search_title
+        # Even if search_title has more word overlap, metadata_title is preferred
+        priority_boost = {"metadata_title": 1000.0, "first_h1": 100.0, "search_title": 0.0}
+        scored = [(h, s, sc + priority_boost.get(s, 0)) for h, s, sc in relevant]
+        scored.sort(key=lambda x: -x[2])
+        best_heading, best_source = scored[0][0], scored[0][1]
+        best_score = scored[0][2] - priority_boost.get(scored[0][1], 0)
+    else:
+        # No candidate has overlap - pick the one with highest raw score
+        # (could be search_title as last resort)
+        candidates.sort(key=lambda x: -x[2])
+        best_heading, best_source, best_score = candidates[0]
+
+    # Log the heading selection at DEBUG level
+    logger.debug(
+        "Heading selected: %r from %s (score=%d, candidates=%s)",
+        best_heading,
+        best_source,
+        best_score,
+        [(h, s, sc) for h, s, sc in candidates],
+    )
+
+    return best_heading, best_source
+
+
+def _extract_url_path(url: str) -> str:
+    """Extract the meaningful words from a URL path for comparison."""
+    if not url:
+        return ""
+    # Remove scheme and domain, get path
+    # e.g., https://python.org/downloads/3.11/ -> "downloads 3 11"
+    import re
+
+    # Strip protocol and domain
+    path = re.sub(r"^https?://[^/]+/", "", url)
+    # Remove trailing slash and file extensions
+    path = re.sub(r"\.(html?|php|asp|aspx|json)$", "", path)
+    # Replace separators with spaces
+    path = re.sub(r"[/_\-.]", " ", path)
+    # Remove numbers from version strings but keep them as words for comparison
+    path = re.sub(r"\d+", " ", path)
+    # Return lowercase words
+    return " ".join(path.lower().split())
+
+
+def _heading_overlap_score(heading: str, url_path: str, search_title: str) -> int:
+    """Score a heading by word overlap with URL path and search title.
+
+    Higher score = more overlap = more relevant.
+    Uses word matching with stop word filtering.
+    """
+    if not heading:
+        return 0
+
+    # Stop words to ignore
+    stop_words = {
+        "the",
+        "a",
+        "an",
+        "of",
+        "in",
+        "on",
+        "for",
+        "to",
+        "and",
+        "or",
+        "with",
+        "by",
+        "at",
+        "from",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "as",
+        "it",
+        "its",
+        "this",
+        "that",
+        "these",
+        "those",
+        "but",
+        "not",
+        "no",
+        "just",
+        "only",
+        "also",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "must",
+    }
+
+    # Extract words from heading (lowercase, no punctuation)
+    heading_words = set(re.findall(r"[a-zA-Z]+", heading.lower()))
+    heading_words -= stop_words
+
+    # Score from URL path overlap
+    url_words = set(url_path.split()) if url_path else set()
+    path_score = len(heading_words & url_words) * 10
+
+    # Score from search title overlap
+    search_words = set(re.findall(r"[a-zA-Z]+", search_title.lower())) if search_title else set()
+    search_words -= stop_words
+    search_score = len(heading_words & search_words) * 10
+
+    # Bonus for having any overlap at all
+    total_overlap = len(heading_words & (url_words | search_words))
+    if total_overlap > 0:
+        total_overlap += 5  # Bonus for having any overlap
+
+    return path_score + search_score + total_overlap
 
 
 def _summarise(markdown: str, sentences: int) -> str:

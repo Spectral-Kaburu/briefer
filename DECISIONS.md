@@ -520,7 +520,10 @@ is a blunt instrument that makes no quality assessment.
 the user's query (e.g., a changelog line like "Fixed: type checker now handles
 recursive generics" shown as the title of a "Python 3.11 release announcement" page).
 
-**Decision pending:** T9.2 will decide the fix. Options include:
-1. A sanity rule: candidate heading must have word overlap with URL, meta description, or search title.
-2. Never use first h1; require a metadata title.
-3. Score multiple h1s and pick the best.
+**Decision:** Implemented option 1 with a tie-breaker priority. Added `_select_heading()` function that:
+1. Scores each heading candidate by word overlap with URL path and search title
+2. Minimum overlap threshold (score >= 1) for a candidate to be considered "relevant"
+3. Priority tie-breaker: metadata_title > first_h1 > search_title
+4. Debug logging via logger.debug() shows selection details
+
+**Implementation:** Modified `extract()` to accept `url` and `search_title` parameters, updated `pipeline._summarize()` and `cli.Extractor` to pass them through, added `_extract_url_path()` and `_heading_overlap_score()` helper functions.

@@ -116,7 +116,13 @@ class FakeExtractor:
         self._raises = raises
         self.seen: list[str] = []
 
-    def extract(self, markdown: str, url: str = "") -> object:
+    def extract(
+        self,
+        markdown: str,
+        title: str | None = None,
+        url: str = "",
+        search_title: str = "",
+    ) -> object:
         self.seen.append(markdown)
         if self._raises is not None:
             raise self._raises

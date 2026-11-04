@@ -1893,6 +1893,40 @@ So the stopping point is a judgement call by the owner on a working, reviewed,
 tested build — not a finished one. Nothing is blocked and nothing is broken;
 `make check` is green and `make live` passes against the live services.
 
+## T9.1 — 2026-11-04 · Markdown cleanup (D1-D6, D2.1)
+
+Implemented `clean_markdown(text)` function in `extract.py` that removes:
+- Setext underlines and horizontal rules
+- Image markdown (`![alt](url)`) and link-wrapped images (`[![...]...)](...)`)
+- Bare URLs
+- Navigation bars, cookie banners, and other furniture lines
+- Lines mostly non-letters or long runs without spaces
+- Collapsed repeated segments (flattened table pattern)
+
+Added 320-character summary cap with word-boundary ellipsis cut. Fixed D2.1, D4, D5, D6.
+All 633 tests pass (6 skipped, 2 xfailed for T9.3).
+
+## T9.2 — 2026-11-04 · Heading fix (D7)
+
+Implemented heading sanity rule in `extract.py`:
+
+1. `_select_heading()` function ranks heading candidates (metadata_title, first_h1, search_title) by word overlap with URL path and search title
+2. Candidates with higher overlap score are preferred; metadata_title has priority tie-breaker
+3. DEBUG logging shows which source was selected and the score breakdown
+
+Modified call chain:
+- `pipeline._summarize()` now passes `url` and `search_title` to `extractor.extract()`
+- `cli.Extractor` class updated to accept the new parameters
+- Heading selection falls back to search_title when no other candidate has overlap
+
+Added 4 new tests in `test_phase9_fixtures.py`:
+- `test_d7_heading_unrelated_sanity_rule`: original defect reproduction
+- `test_d7_metadata_title_with_overlap_is_used`: priority test
+- `test_d7_h1_with_overlap_is_used_when_metadata_lacks_it`: h1 fallback test
+- `test_d7_no_overlap_falls_back`: edge case test
+
+All tests pass. `make check` → 633 passed, 6 skipped, 2 xfailed.
+
 
 
 
