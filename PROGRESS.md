@@ -1848,6 +1848,29 @@ Phase 9's premise is T8.7's finding that the output is a page dump, not an
 answer — 3 of 5 live results were a US recall unrelated to the query. Its first
 task is a catalogue of the defects, not new features.
 
+## T9.0 — synthetic fixtures for defects D1-D6, D8, D9
+
+Created `tests/fixtures/` directory with synthetic markdown fixtures for each defect:
+
+- `d1_setext_underline.md` — setext heading with underline leaking
+- `d2_images_links.md` — image markdown and wrapped images
+- `d3_page_chrome.md` — skip-to-content, edit-page, view-this-page text
+- `d4_concatenated_nav.md` — version list concat like "3.16)3.15.23.14…"
+- `d5_flattened_tables.md` — repeated "Version: 3.11 Status: Stable" rows
+- `d6_no_terminators.md` — long run-on sentence without punctuation
+- `d8_buried_answer.md` — answer sentence buried in intro paragraph
+- `d9_multiple_hosts.md` — same host multiple slots
+
+Created `tests/test_phase9_fixtures.py` with xfail tests:
+- D1-D3: Tests pass (fixed in T8.7), but xfail markers document the original defects
+- D2.1 (new sub-defect): Link-wrapped images `[![...](...)]` not stripped
+- D4: Tests xfail - navigation run pattern should be stripped
+- D5, D6: Tests xfail - table rows, uncapped summary
+- D7: Diagnosis recorded in DECISIONS.md
+- D8, D9: Tests xfail - answer buried, fuzzy matching needed
+
+All tests green: `pytest` → 625 passed, 6 skipped, 7 xfailed
+
 ### Stopped here, on the owner's instruction (2026-11-04)
 
 The owner called the stop mid-session and asked for `STOP_OK`, so it is created

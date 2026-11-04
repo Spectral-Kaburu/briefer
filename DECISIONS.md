@@ -501,3 +501,26 @@ because the field is a passthrough.
 is unchanged from what already shipped, and the example config's comment now
 says why changing `region` may not help.
 
+## D7 — 2026-11-04 · Heading from first h1 can be unrelated to page content (T9.0 diagnosis)
+
+Diagnostic probe: `curl -s -X POST http://localhost:3002/v2/scrape` for
+`https://versionlog.com/python/3.11/` was blocked by sandbox permissions.
+Recorded in `BLOCKED.md`. Reasoned from code instead.
+
+**Observation:** `extract.py:112` selects heading as: `title or _first_h1(markdown)`.
+When no title is provided, it takes the *first* `h1` in the markdown. This can be
+anything the page puts there — navigation titles, changelogs, sidebar headings,
+or actual page titles.
+
+**Root cause:** The pipeline (search result title as `title`) should provide a
+relevant heading, but when `title` is `None` or empty, the fallback to first h1
+is a blunt instrument that makes no quality assessment.
+
+**Diagnosed pattern from T8.7:** pages where `data.metadata.title` is unrelated to
+the user's query (e.g., a changelog line like "Fixed: type checker now handles
+recursive generics" shown as the title of a "Python 3.11 release announcement" page).
+
+**Decision pending:** T9.2 will decide the fix. Options include:
+1. A sanity rule: candidate heading must have word overlap with URL, meta description, or search title.
+2. Never use first h1; require a metadata title.
+3. Score multiple h1s and pick the best.

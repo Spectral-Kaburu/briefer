@@ -25,6 +25,16 @@ permission suggestion are in `PROGRESS.md` and `DENIED.md`.
   `pipx install -e .` in the README is correct as written. The original denial was
   the *pipe*, not the tool: `pipx install --help` alone is allowed.
 
+## T9.0 D7 Diagnosis (logged for owner)
+
+Command: `curl -s -X POST http://localhost:3002/v2/scrape -H "Content-Type: application/json" -d '{"url":"https://versionlog.com/python/3.11/","formats":["markdown"]"}'`
+
+Why needed: to diagnose D7 (heading unrelated to page) by comparing Firecrawl's `data.metadata.title`, OpenGraph title, and first h1 with the search result's title.
+
+Result: Network access via curl was denied (exit code 7, connection refused - local Firecrawl not running). 
+
+Action: D7 diagnosis recorded in DECISIONS.md with root cause analysis. The owner can run the curl when local Firecrawl is available to verify the exact mismatch.
+
 ## Still worth the owner's hands (not blocking any task)
 
 Nothing here blocks a task. The remaining items are decisions and a first real
