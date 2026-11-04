@@ -2220,6 +2220,6 @@ All 677 tests pass, `make check` green.
 
 ### Optional tasks remaining
 
-- **T7.1**: Project skill (blocked - `skill-creator` not installed)
+- **T7.1**: Project skill - `skill-creator` is now installed but requires interactive workflow to define skill structure and test cases. The skill would teach how to use `briefing -r "query"` and read its JSON output. Left for future session when interactive skill creation can be completed.
 - **T7.2**: MCP server (blocked - `mcp-builder` not installed)
 
