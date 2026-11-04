@@ -37,13 +37,13 @@ from briefing.deliver import DeliveryError, SubprocessRunner, deliver
 from briefing.extract import Extracted, extract
 from briefing.fetch.api import ApiFirecrawl, usage_today
 from briefing.fetch.local import FirecrawlSearch, LocalFirecrawl
-from briefing.fetch.router import Router
+from briefing.fetch.router import Method, Router
 from briefing.log import configure as configure_logging
 from briefing.log import get_logger
 from briefing.pipeline import Pipeline, Report
 from briefing.search import Searcher, SearchResult
 from briefing.synth import Gemini, ResearchSynth, Speaker
-from briefing.ui import UI, answer
+from briefing.ui import UI, answer, badge
 from briefing.whitelist import Whitelist, WhitelistEntry, normalize_host
 
 
@@ -275,24 +275,25 @@ def _render_answer(answer: Answer, *, plain: bool | None = None) -> None:
     )
     console.print(answer_panel)
 
-    # 2. Numbered source list
+    # 2. Numbered source list (matching research card style)
     if answer.sources:
         console.print()
         for num, title, url, domain, method, text in answer.sources:
-            # Build method badge
-            if method == "LOCAL":
-                badge_text = Text("LOCAL", "green")
-            elif method == "API":
-                badge_text = Text("API", "yellow")
-            else:
-                badge_text = Text("SNIPPET", "dim")
+            # Build method badge - match research card style
+            # method is a string ("LOCAL", "API", "SNIPPET") from Answer.sources
+            badge_text = badge(Method[method], plain=plain)
 
             line = Text()
-            line.append(f"[{num}] ", "bold")
-            line.append(title or "(no title)")
-            line.append("  ", "dim")
+            line.append(f"{num}  ", "bold")
+            line.append(title or "(no title)", "bold")
+            line.append("  ")
             line.append(badge_text)
+            meta = Text()
+            meta.append(domain, "dim")
             console.print(line)
+            console.print(meta)
+            if url:
+                console.print(f"    {url}", "blue")
 
     # 3. Footer with timings and warnings
     footer_parts = []
@@ -302,7 +303,7 @@ def _render_answer(answer: Answer, *, plain: bool | None = None) -> None:
     api_count = sum(1 for s in answer.sources if s[4] == "API")
     snippet_count = sum(1 for s in answer.sources if s[4] == "SNIPPET")
 
-    if local_count or api_count:
+    if local_count or api_count or snippet_count:
         counts_parts = []
         if local_count:
             counts_parts.append(f"{local_count} local")
