@@ -186,6 +186,7 @@ class TestKnowledgeConfig:
         assert config.user_agent == ""
         assert config.stackexchange_key_env == "STACKEXCHANGE_KEY"
         assert config.quota_floor == 20
+        assert config.backoff == 60.0
 
     def test_knowledge_config_can_be_overridden(self) -> None:
         """KnowledgeConfig can be customized."""

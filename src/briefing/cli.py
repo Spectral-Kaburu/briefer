@@ -432,10 +432,12 @@ def _configure_logging(loaded: Config, verbose: bool) -> None:
     """
     firecrawl_key = resolve_api_key(loaded, os.environ)
     gemini_key = resolve_gemini_key(loaded, os.environ)
+    # Stack Exchange key: read from env at call time (knowledge adapter pattern)
+    stackexchange_key = os.environ.get(loaded.knowledge.stackexchange_key_env, "") or None
     configure_logging(
         log_file=loaded.paths.log_file,
         verbose=verbose,
-        secrets=[k for k in (firecrawl_key, gemini_key) if k],
+        secrets=[k for k in (firecrawl_key, gemini_key, stackexchange_key) if k],
     )
 
 

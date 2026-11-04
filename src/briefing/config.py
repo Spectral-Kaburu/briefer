@@ -179,6 +179,8 @@ class KnowledgeConfig(BaseModel):
     stackexchange_key_env: str = "STACKEXCHANGE_KEY"
     #: Quota floor below which Stack Exchange calls are skipped (default: 20).
     quota_floor: int = 20
+    #: Backoff in seconds to wait when API suggests it (default: 60, None = use API value).
+    backoff: float | None = 60.0
 
 
 class Paths(BaseModel):
