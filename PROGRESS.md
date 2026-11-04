@@ -1958,8 +1958,10 @@ Implemented query-aware passage selection for the `-r` research command:
 6. **Updated tests in `tests/test_phase9_fixtures.py`**:
    - `test_d8_answer_in_later_paragraph`: query "what version is stable" finds "3.12" in summary
    - `test_d9_typo_query_finds_relevant_content`: fuzzy matching finds "version" from "verstion" typo
+   - `test_d8_query_no_match_falls_back_to_default_summary`: query with no matching terms falls back
+   - `test_d8_stopword_only_query_falls_back`: stop-word-only query falls back to default
 
-All tests pass. `make check` → 635 passed, 6 skipped.
+All tests pass. `make check` → 637 passed, 6 skipped.
 
 
 
