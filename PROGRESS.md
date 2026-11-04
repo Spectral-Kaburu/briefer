@@ -1637,6 +1637,97 @@ made the linked-a11y test fail.
 chrome at all, and card 2's "Skip to main content" header block is gone. What
 remains on the worst cards is #3 and #4 below, not #1.
 
+## T8.8 — 2026-11-04 · README rewritten against the running CLI, and one T8.2 claim it exposed
+
+Docs task: "README: config discovery and precedence, region default and how to
+re-probe it, backup search behaviour, `user_name`, trial-run advice, and the test
+isolation guard. Remove any stale claim and any ticket number from user-facing
+text."
+
+**Everything was checked against the source, not against the previous wording.**
+`briefing --help`, `briefing research --help`, `briefing run --help` and
+`briefing config` were all run, and every claim traced to a `file:line`. T8.0
+had already established that a doc can be confidently wrong; the pattern held.
+
+### Stale claims removed
+
+| Claim in README | Truth | Fix |
+|---|---|---|
+| Config file is `~/.config/briefing/briefing.yaml` | It is **`config.yaml`** — `config.py:181` `default_config_path()`, and `briefing config`'s own hint says so. The example file's *name* is `briefing.yaml.example`, which is very likely where the wrong name came from. | Corrected, plus the discovery precedence written out |
+| `git checkout v2.11.162` "the version briefing's paths were written against" | **Unsourced.** That tag appears nowhere in the repo, and WebFetch on the Firecrawl docs is refused in this mode (logged in `DENIED.md`). The local instance reports no version: `GET /` → `{"message":"Firecrawl API"}`, and `/version` is not a route on it. | Replaced with what *is* verified and load-bearing: the `/v2/` API surface in `NOTES-APIS.md` §1–2. No version is asserted that cannot be checked |
+| `make live` documented as `BRIEFING_LIVE=1 .venv/bin/pytest -m live`, needing an allowlist entry | CLAUDE.md's second-pass rules explicitly refuse that inline form; `make live`'s recipe sets the variable itself (Makefile:20-21) | `make live`, with why the inline form is not needed |
+| "the four `@pytest.mark.live` tests" | **Six** — `test_live.py` has 6 markers; the count went stale when T8.2 added the two backup-adapter ones | Fixed in README **and** in the Makefile comment that caused it |
+| "or if your `pipx` predates `--editable`" as the reason to prefer the venv | `--editable` was verified a real flag in T8.6, four lines below this hedge | Hedge dropped; the venv fallback stands on "if you don't use pipx" |
+| `briefing: {name: Aether}` only | Two fields since T8.5 | `{user_name: "", name: Aether}`, plus the one-direction-each explanation |
+
+### Added
+
+- **Config discovery precedence** (T8.3): `--config PATH` → `$BRIEFING_CONFIG` →
+  `<user config dir>/briefing/config.yaml` → built-in defaults, with a missing
+  default silent and a stale env var falling through (`config.py:184-201`).
+  A detail the first verifier pass caught: `--config` exists on `research`, `run`
+  and `config`, **not** on `status` or the `whitelist` subcommands
+  (`cli.py:195`, `cli.py:487`, `cli.py:358` are the only three). The second pass
+  then caught that my first correction listed `config` among the commands that
+  lack the flag — `briefing config --help` advertises `--config` (`cli.py:358`),
+  which the earlier grep for the option's signature had missed. Both fixed.
+- **`search.region`**: the default, the 2026-11-04 null result, and
+  `make probe-region` to re-run it — so the "why us-en" is not folklore.
+- **Backup search** (T8.2): what triggers it, that it never raises, and which
+  log level each case uses.
+- **`user_name`** (T8.5/D26): the direction each name runs, and that the default
+  addresses nobody rather than the assistant.
+- **Trial-run advice**: `--dry-run` records no state; a real run marks the day
+  fired (`cli.py:535-540`) and so suppresses the 08:00 `briefing.timer`.
+- **Test isolation guard** (T8.1): what it blocks, the two layers, the seams, and
+  the rule that a blocked test is fixed by patching rather than exempting.
+- `BLOCKED.md` and `DENIED.md` added to the Documentation table (all targets
+  exist; the README had three links, all resolving).
+- Status section: Phases 0–7 complete, Phase 8 finishing — it said "Phases 0–5 …
+  Phase 6 in progress", three phases out of date.
+
+### Defect found and fixed: the INFO log T8.2 decided but never wrote
+
+The first verifier pass returned FAIL on one substantive finding, and it was
+right. PLAN.md's T8.2 text records the decision "an empty (not failed) `ddgs`
+answer still triggers the backup, **now logged at INFO**", and the box is ticked
+DONE — but `search.py` had only the DEBUG failure log. An empty ddgs answer
+reached the backup silently, so the recorded decision described behaviour that
+did not exist.
+
+Fixed test-first in `src/briefing/search.py`: the INFO line, guarded by
+`self.backup is not None` so it never claims an attempt that is not in play. Two
+new tests in `tests/test_search.py`:
+
+- `test_an_empty_ddgs_answer_says_at_info_that_it_is_trying_the_backup` — the
+  empty answer really reaches the backup **and** logs the trigger at INFO.
+- `test_no_backup_configured_logs_nothing_about_trying_one` — with
+  `backup=None` nothing is logged about trying one, because a log that says
+  "trying backup" when there is none sends the reader chasing a service that is
+  not in play.
+
+Sabotage-verified twice: with the line absent the first test fails on `assert
+triggers`; with the line **downgraded to DEBUG** it fails again — so the level is
+pinned, not just the wording. Restored and re-run green.
+
+`DECISIONS.md`'s D25 sub-decision now carries an explicit correction marking the
+gap and when it was closed, and PLAN.md's T8.2 tick note says the same, so
+neither document keeps asserting something that was untrue when written.
+
+`make check` → **614 passed, 6 skipped** (612 + 2 new), `ruff check` and
+`ruff format --check` clean.
+
+### Not done, and why
+
+- `--config` was **not** added to `status`, `config` or the `whitelist`
+  subcommands. It would make the precedence uniform, but it is a code change
+  with a test surface of its own, inside a docs task — the README now states
+  where the flag actually exists instead. Worth a small task of its own.
+- The README still does not name the environment variable `--llm` needs. The SDK
+  reads its own key, so there is nothing in `config.py` to point at; naming it
+  correctly needs a look at `synth.py`'s client construction, not a guess.
+
+
 
 
 

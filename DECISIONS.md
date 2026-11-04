@@ -416,6 +416,16 @@ trying backup"). A rate-limited or timed-out search and a search that genuinely
 found nothing are indistinguishable to a user waiting for a briefing, and the
 backup costs one local HTTP call.
 
+**Correction, 2026-11-04 (found by T8.8):** the decision above was recorded when
+T8.2's box was ticked, but the INFO line was never written — `search.py` had only
+the DEBUG failure log, so an empty ddgs answer fell through silently and this
+decision described behaviour that did not exist. The log now exists
+(`search.py`, guarded by `self.backup is not None` so it never claims an attempt
+that is not in play), and two tests in `tests/test_search.py` pin it: one that
+the empty answer really reaches the backup and logs the trigger at INFO, one that
+`backup=None` logs nothing about trying. The level, not just the wording, is
+pinned — downgrading the line to DEBUG fails the first test.
+
 Cost, so it is not rediscovered: `FirecrawlSearch` returning `[]` means a
 *degraded instance* and a *broken adapter* look identical to any caller. The live
 test in `test_live.py` therefore probes the raw endpoint before failing, and

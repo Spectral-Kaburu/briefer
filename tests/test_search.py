@@ -8,6 +8,7 @@ are injected, so nothing here hits the network.
 from __future__ import annotations
 
 import asyncio
+import logging
 import typing as t
 from datetime import UTC, datetime, timedelta
 
@@ -471,6 +472,47 @@ def test_timeout_also_falls_back() -> None:
     assert len(results) == 1
     assert results[0].origin == "search"
     assert backup.calls == [{"query": "latest flooding", "limit": 10, "mode": "news"}]
+
+
+def test_an_empty_ddgs_answer_says_at_info_that_it_is_trying_the_backup(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An empty answer is a fallback too, and T8.2 decided it says so at INFO.
+
+    A silent `[]` from ddgs is indistinguishable from a dead adapter in the
+    output, so the log is the only place the reason survives. Only the *trigger*
+    is INFO; a backup that then fails stays at DEBUG, because that is expected
+    often enough not to be worth waking up for.
+    """
+    backup = FakeFirecrawlSearch(results=[SEARCH_HIT])
+    searcher = _searcher(ddgs_factory=lambda: FakeDDGS(news=[]), backup=backup, backoff_s=0)
+    with caplog.at_level(logging.INFO, logger="briefing.search"):
+        results = asyncio.run(searcher.search("latest flooding"))
+    assert len(results) == 1
+    assert backup.calls, "the empty answer must really reach the backup"
+    triggers = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.INFO and "ddgs returned nothing" in record.message
+    ]
+    assert triggers, [r.message for r in caplog.records]
+
+
+def test_no_backup_configured_logs_nothing_about_trying_one(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """No backup configured: nothing may be logged about trying one.
+
+    The INFO line is a claim about what happens next. With `backup=None` the
+    empty answer is the whole result, and logging an attempt that never happens
+    would send whoever reads the log chasing a service that is not in play.
+    """
+    searcher = _searcher(ddgs_factory=lambda: FakeDDGS(news=[]), backoff_s=0)
+    with caplog.at_level(logging.INFO, logger="briefing.search"):
+        assert asyncio.run(searcher.search("latest flooding")) == []
+    assert not [r for r in caplog.records if r.levelno == logging.INFO], [
+        r.message for r in caplog.records
+    ]
 
 
 def test_both_fail_returns_empty(fake: FakeDDGS) -> None:

@@ -216,3 +216,23 @@ Adding `Bash(git commit --amend *)` to `permissions.allow` would also be the
 better fix: amending the message of the commit you just wrote is a normal part of
 the CLAUDE.md loop (tick the box, append to PROGRESS, *then* commit), and without
 it every message must be final before the first `git commit`.
+
+## 2026-11-04 · `WebFetch` on the Firecrawl docs (T8.8)
+
+Tool: `WebFetch` on `https://docs.firecrawl.io/quickstart`. Why I wanted it: the
+README pinned `git checkout v2.11.162` as "the version briefing's paths were
+written against", and no file in the repo records that tag — not
+`NOTES-APIS.md`, not `DECISIONS.md`, not any commit. CLAUDE.md says to fetch the
+docs and record verified facts rather than guess, so I tried to verify which v2
+release the `/v2/scrape` and `/v2/search` paths were verified against.
+
+Refused because the session runs in "don't ask" mode. **Not re-tried as a
+variant**, and the local instance reports no version either: `GET /` answers
+`{"message":"Firecrawl API"}`, and `/version` and `/api/version` are not routes
+on it.
+
+Consequence, fixed rather than left standing: the README now names what is
+load-bearing and verified — the `/v2/` API surface, recorded in `NOTES-APIS.md`
+sections 1 and 2 — and asks for "any recent v2 image" instead of an unsourced
+tag, so nothing asserts a version that cannot be checked. If the owner wants a
+pin, the image label on their running instance is where the real tag comes from.

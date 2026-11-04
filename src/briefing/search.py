@@ -205,7 +205,11 @@ class Searcher:
                 lambda ddgs, limit: ddgs.text(query, **self._kwargs(limit)), "text"
             )
         # SPEC section 5: the local /search backup covers ddgs failing *or* being
-        # rate-limited, so a retry that came back empty routes to it too.
+        # rate-limited, so a retry that came back empty routes to it too. The
+        # empty case is logged at INFO because it is invisible in the output: a
+        # silent `[]` from ddgs looks exactly like a search that found nothing.
+        if not results and self.backup is not None:
+            logger.info("ddgs returned nothing, trying backup")
         return results or await self._backup_search(query)
 
     async def _backup_search(self, query: str) -> list[SearchResult]:
