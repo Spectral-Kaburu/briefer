@@ -22,7 +22,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from briefing.ask import Answer
+from briefing.ask import Answer, NoSearchResultsError
 from briefing.briefing import DedupStore, FileAudioState, FileSessionSummary, Gate, TopicFilter
 from briefing.config import (
     Config,
@@ -228,17 +228,20 @@ def _ask(
     loaded = _load(config)
     _configure_logging(loaded, verbose)
 
-    result: Answer = asyncio.run(
-        _ASK(
-            query=query,
-            pages=pages,
-            time=time,
-            news=news,
-            web=web,
-            no_api=no_api,
-            config=config,
+    try:
+        result: Answer = asyncio.run(
+            _ASK(
+                query=query,
+                pages=pages,
+                time=time,
+                news=news,
+                web=web,
+                no_api=no_api,
+                config=config,
+            )
         )
-    )
+    except NoSearchResultsError as exc:
+        _fail(exc.message, exc.hint)
 
     # Render the output
     if json_out:

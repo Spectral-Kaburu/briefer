@@ -376,6 +376,26 @@ def test_ask_error_moving_and_a_question_is_clean(monkeypatch: t.Any, tmp_path: 
     assert "QUERY" in result.stderr or "query" in result.stderr.lower()
 
 
+def test_ask_nothing_found_produces_clean_error(monkeypatch: t.Any, tmp_path: t.Any) -> None:
+    """When no search results, ask should produce a clean error with fix hint."""
+    from briefing.ask import NoSearchResultsError
+
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+
+    async def fake_ask_nothing_found(*args: t.Any, **kwargs: t.Any) -> Answer:
+        raise NoSearchResultsError(
+            "No search results found for your query.",
+            "Try a different query or check your network connection.",
+        )
+
+    monkeypatch.setattr(cli_module, "_ASK", fake_ask_nothing_found)
+
+    result = runner.invoke(cli_module.app, ["ask", "xyznonexistentquery123"])
+    assert result.exit_code != 0
+    assert "Traceback" not in result.stderr
+    assert "No search results" in result.stderr or "No search results found" in result.stderr
+
+
 # --- Footer output -----------------------------------------------------------
 
 
