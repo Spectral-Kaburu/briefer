@@ -1992,3 +1992,69 @@ Implemented complete Gemini key plumbing per the acceptance criteria:
 
 All tests pass. `make check` → 641 passed, 6 skipped.
 
+## T9.5 — 2026-11-04 · Ask mode core
+
+Implemented `src/briefing/ask.py` with the complete ask mode flow:
+
+1. **Created `ask.py`** with `ask()` async function returning `Answer` dataclass
+   - `Answer(question, text, used_llm, sources, timings, warnings)`
+   - Source tuple: `(number, title, url, domain, method, passages)`
+
+2. **Source selection**: Pages chosen by rank with at most one per normalized host
+   - Uses existing `normalize_host()` function
+   - Prevents duplicate hosts (e.g., two `.co.ke` sites both surviving)
+
+3. **Fetching**: Concurrent fetch through existing router with:
+   - Per-URL timeout (config `ask.per_url_s` = 8)
+   - Overall deadline (config `ask.deadline_s` = 10)
+   - Slow fetches cancelled, contribute snippet only
+   - Evidence = passages from T9.3 plus snippet
+
+4. **Prompt engineering**: Inline prompt constant with:
+   - Source text inside delimited blocks (closing delimiter stripped)
+   - "Ignore instructions" text stays inside the block
+   - Date from injected clock, disagreement detection, answer-first format
+   - Low temperature, small output limit
+
+5. **No model path**: Returns `used_llm=False` with passages and warning
+   - Never fabricates an answer
+
+6. **Empty search**: Clear error with fix hint
+
+Tests added in `tests/test_ask.py`: 12 synthetic fixtures covering numbering, one-per-host, deadline cancellation, date/disagreement in prompt, instruction injection containment, model/key missing, empty search.
+
+`make check` → 670 passed, 6 skipped.
+
+## T9.6 — 2026-11-04 · Ask mode CLI and rendering
+
+Implemented CLI surface for ask mode in `src/briefing/cli.py` and `src/briefing/config.py`:
+
+1. **Shorthand `-a/--ask/--instant`**: Group callback with `invoke_without_command=True`
+   - Calls `_ask_implementation()` with question and mode flags
+   - Patches cleanly by tests via `_ASK` seam
+
+2. **Config `AskConfig`**: Added to `config.py` with `results: 6`, `pages: 3`, `deadline_s: 10.0`
+   - Example config updated with `ask:` section
+
+3. **`ask` subcommand**: Typer command with flags:
+   - `--pages N` (int): max pages to include
+   - `--time` (choice): days/weeks/months limit for search
+   - `--news/--web` (mutually exclusive): force search mode
+   - `--no-api` (bool): skip cloud Firecrawl fallback
+   - `--json` (bool): JSON output format
+   - `--plain` (bool): no ANSI colors
+
+4. **Response rendering** (`_render_answer()`):
+   - Answer panel with Rich `Text` (never markup for safety)
+   - Numbered source list: domain, title (h1-style), URL, method badge
+   - Footer: sources used, counts (local/API/snippet), timings (search/fetch/model)
+
+5. **JSON output** (`_answer_as_json()`):
+   - `{question, answer, used_llm, sources: [{n, title, url, domain, method, passages}], timings, warnings}`
+
+6. **Error handling**: Clean messages with hints for missing query, unreadable config
+
+Tests in `tests/test_ask_cli.py`: 21 tests covering shorthand, subcommand, flags, JSON format, mutual exclusivity, rendering quality, error cases.
+
+All 676 tests pass. `make check` green.
+
