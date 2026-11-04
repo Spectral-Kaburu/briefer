@@ -1727,6 +1727,128 @@ neither document keeps asserting something that was untrue when written.
   reads its own key, so there is nothing in `config.py` to point at; naming it
   correctly needs a look at `synth.py`'s client construction, not a guess.
 
+## Phase 8 summary — 2026-11-04 · close-out
+
+Phase 8 was the owner's second pass: an audit of the finished build (T8.0),
+then the tasks that audit said were needed. Twelve commits, `f9f8625..HEAD`,
+35 files, +3318/−342.
+
+| Task | What it was | Outcome |
+|---|---|---|
+| T8.0 | Read-only audit, four written questions | All four needed. Named what each of the next tasks was for |
+| T8.1 | Test isolation guard | `tests/conftest.py` autouse fixture; 13 tests had seams patched; **found a defect in the guard itself** (it installed unconditionally while promising live tests were exempt) and pinned the fix by asserting on the fixture's own source |
+| T8.2 | Real backup-search adapter | `FirecrawlSearch` supersedes T2.2a's raising `LocalFirecrawl.search`; D25 reverses D22; found the `base_url` `rstrip` bug and a live-test `NameError`; **explained `make live`'s flakiness as a service fault** (engines down, API up) rather than a broken adapter — `NOTES-APIS.md` §2 |
+| T8.3 | Config discovery | `--config` → `$BRIEFING_CONFIG` → platformdirs path → defaults, with a missing default silent and a stale env var falling through. D15/D16 resolved |
+| T8.4 | Region probe | **Null result.** `ke-en`/`wt-wt`/`us-en` return the same five hosts, none `.ke`, for a Kenya query. D27 keeps `us-en`; `make probe-region` re-runs it |
+| T8.5 | Two names | `user_name` (addressee, default empty) split from `name` (speaker). D26. The greeting no longer greets the assistant |
+| T8.6 | Two previously-refused claims | Both verify: `systemd-analyze verify` parses both units clean, `pipx install --help` shows `--editable` is real. **Nothing to fix** |
+| T8.7 | First real end-to-end run | Found and fixed the nav-chrome extraction defect test-first, sabotage-verified five behaviours; four defects deferred with reasons rather than half-fixed |
+| T8.8 | README against the CLI | Six stale claims removed, five mandated items added, **and it exposed that T8.2's INFO log was decided but never written** — implemented and tested the same commit |
+
+**The pattern across all of it:** in T8.2, T8.6, T8.7 and T8.8 the recorded
+description of the code was ahead of the code — a decision logged as done, a
+reviewed-but-unparsed unit, a fix noted before it was written, a doc describing
+behaviour that did not exist. T8.0's four questions were all cases of the same
+thing. The lesson worth keeping: **tick nothing on the strength of its prose**,
+and re-read the source before trusting a note about it.
+
+### Close-out review — PASS
+
+The four explicit questions, each answered against `src/` and run:
+
+1. **Does anything catch `BaseException`?** No. No `except BaseException`/bare
+   `except:` in `src/`; no `contextlib.suppress` anywhere; every `except Exception`
+   is `# noqa: BLE001` and intentional. `RealSideEffectBlocked` derives from
+   `BaseException` (`tests/conftest.py:72`) and is counted *before* it is raised
+   (`conftest.py:83`), so even a swallow cannot hide it. The four
+   `except BaseException` occurrences in `tests/test_isolation.py` are tests of
+   the guard itself.
+2. **Does the backup adapter honour its timeout?** Yes: `config.py:46` →
+   `cli.py:594-597` → `fetch/local.py:168-171` puts `timeout_s` on the real
+   `httpx.AsyncClient`, and a timeout that fires returns `[]` via the
+   never-raises contract. Coverage note, not a defect: the timeout test injects
+   `httpx.ReadTimeout`, so it proves the *swallow* rather than the real client's
+   deadline firing.
+3. **Can any code path build a real `voice-tts` call during tests?** No, and
+   twice over: `_RUNNER` is the only spawn point (`deliver.py:114`) and every
+   delivery test patches it, while the T8.1 guard blocks
+   `asyncio.create_subprocess_exec` as a backstop for an unpatched seam. The
+   refusal tests assert `fake_runner.calls == []`, so a gate regression fails
+   rather than speaking.
+4. **Is any key or name hard-coded?** No. `FIRECRAWL_API_KEY` appears only as an
+   env var *name*; the value is read at call time (`config.py:253-260`) and is
+   absent-without-a-key. `gemini-2.5-flash` is a documented default. `Aether` is
+   the speaker; the addressee defaults to empty and fixtures use synthetic
+   "Sam".
+
+`make check` → **614 passed, 6 skipped**; `ruff check` and `ruff format --check`
+clean. `make live` → **6 passed** against the real ddgs and the real local
+Firecrawl on 2026-11-04, no skips.
+
+### One box was ticked late, and why that is worth a line
+
+T8.7's work was committed as `0ff199c` and its findings are in `PROGRESS.md`, but
+the `PLAN.md` box was never flipped and its DONE note never written — so on
+2026-11-04 the plan still read `- [ ]` for a finished task. Tick and note are now
+written (T8.9), with the task text preserved verbatim apart from the box itself.
+This is the same prose-ahead-of-the-code failure in its mirror image: here the
+*code* was ahead of the prose, and the next session would have re-run a smoke
+test that had already run.
+
+### What the owner must still do
+
+1. **Keys, only if you want the features that need them.** Nothing else requires
+   one. `FIRECRAWL_API_KEY` enables the cloud fallback for pages the local
+   Firecrawl cannot get past (`--no-api` skips it entirely); the Gemini key and
+   `pipx install 'briefing[llm]'` enable `--llm` and `--synth`. Every other
+   command works with no key at all, and a key can reach neither the log nor the
+   JSON output.
+2. **Run `briefing run --dry-run` yourself.** It was never run through the real
+   entry point — not even dry — because `briefing run` is the one command that
+   can reach `voice-tts`. Its behaviour is covered by tests with fake runners,
+   but the first real thing you hear should be yours to trigger. `--dry-run`
+   records no state, so run it as often as you like. A **real** run marks that
+   day fired and will suppress the 08:00 `briefing.timer` — so do not use a real
+   run to test the schedule.
+3. **Decide D7 your way.** An unreadable audio state is treated as "not
+   speaking", which opens the gate (`DECISIONS.md` D7). The reasoning: a gate
+   that never opens is a briefing that silently never speaks. If you would rather
+   a corrupt state file stop the briefing than risk talking over you once, the
+   provider is injectable (`FileAudioState`) and inverting it needs no change to
+   `Gate`.
+4. **`voice-tts` itself has never been executed.** Delivery builds argv through
+   an injectable runner and tests use a `FakeProcess`; the audio, the real
+   binary's exit codes on this machine, and whether the spoken text sounds right
+   are unverified by design and belong to you.
+5. **The residual extraction defects from T8.7**, none of them fixed because each
+   needed a heuristic that can eat real prose: a recommendation-block link list
+   dominating a summary; a long in-page UI run ending at a `;)`; `heading` always
+   empty in JSON; URLs wrapping mid-token at 78 columns; and sponsor furniture
+   ("Presented by … {beacon}"). See `PROGRESS.md` T8.7 for the full list with
+   reasons.
+6. **One known limitation of the boilerplate filter, deliberately unchanged:**
+   `_BOILERPLATE_LINE_MARKERS` matches as *substrings* of a whole lowered line
+   (`extract.py:219`), so a real sentence containing e.g. "privacy policy" or
+   "terms of service" would be dropped with its line. T8.7 split the cut-as-prefix
+   phrases out for exactly this reason; the rest need the same treatment one
+   phrase at a time, which is a task rather than a default.
+7. **Two optional tasks remain unchecked and are not blocked** — T7.1 (a project
+   skill) and T7.2 (an MCP server), both listed as `(optional)` in `PLAN.md` and
+   both dependent on skills (`skill-creator`, `mcp-builder`) that are not
+   installed here. Nothing in the build waits on either.
+8. **Not verified, and could not be from this session:** `WebFetch` is refused in
+   dontAsk mode, so no doc page was re-checked at runtime — every external fact
+   in `NOTES-APIS.md` was verified earlier or by probing the live instance, and
+   the one claim that could not be verified at all (the Firecrawl image tag) was
+   removed from the README rather than left standing (`DENIED.md`).
+
+### Deferred to Phase 9
+
+Phase 9's premise is T8.7's finding that the output is a page dump, not an
+answer — 3 of 5 live results were a US recall unrelated to the query. Its first
+task is a catalogue of the defects, not new features.
+
+
 
 
 
