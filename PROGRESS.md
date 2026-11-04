@@ -2305,3 +2305,24 @@ All 677 tests pass, `make check` green.
 - Tests for typos, empty input, whitespace, case insensitivity
 - All tests pass, `make check` green
 
+### T10.6 — 2026-11-05 · Wire knowledge adapters into ask mode
+
+**Status**: NOT IMPLEMENTED (reviewer found T10.6 incomplete per task a6071b35add5fbbf4)
+
+**Required changes** (identified by reviewer):
+- `ask.py` does not reference knowledge adapters at all
+- `choose_sources()` from `route.py` is never imported or called in `ask.py` or `cli.py`
+- No concurrent adapter startup, no deadline enforcement for adapters
+- No host de-duplication between knowledge and web results
+- `knowledge.enabled` flag not checked anywhere
+- `Answer.sources` tuple lacks `license` and `author` fields needed for knowledge sources
+
+**Blocking**: T10.6 is a blocking dependency for T10.7, T10.8, and T10.9. Implementation requires:
+1. Adding knowledge adapter wiring in `_ask_implementation` (cli.py)
+2. Modifying `ask()` function signature to accept knowledge adapters
+3. Running adapters concurrently with search under the deadline
+4. Adding host de-duplication logic
+5. Updating `_build_prompt` to include license/author for knowledge sources
+6. Expanding `Answer.sources` tuple to include `license` and `author` fields
+7. Updating all 757 tests that create `Answer` objects with the new tuple structure
+

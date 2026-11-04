@@ -1,6 +1,7 @@
 """Ask mode: answer a question from fetched web pages (T9.5).
 
 One-per-host selection, deadline cancellation, evidence extraction.
+Knowledge adapters integration (T10.6).
 """
 
 from __future__ import annotations
