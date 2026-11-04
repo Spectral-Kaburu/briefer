@@ -1927,6 +1927,40 @@ Added 4 new tests in `test_phase9_fixtures.py`:
 
 All tests pass. `make check` → 633 passed, 6 skipped, 2 xfailed.
 
+## T9.3 — 2026-11-04 · Query-aware passages (D8, D9)
+
+Implemented query-aware passage selection for the `-r` research command:
+
+1. **Created `src/briefing/relevance.py`** with BM25-style scoring:
+   - `split_into_chunks()`: splits cleaned text into 2-3 sentence chunks
+   - `score_chunk()`: tokenizes query/chunk, removes stop words, applies plural folding, scores word overlap
+   - `rank_chunks()`: ranks chunks by relevance score
+   - `_fuzzy_match()`: handles typo tolerance for 5+ letter tokens (e.g., "verstion" → "version")
+   - Date/digit boost when query contains version/release/latest keywords
+
+2. **Updated `extract.py`**:
+   - `extract()` now accepts optional `query` parameter
+   - When query is provided, uses relevance module to select best 1-2 chunks
+   - Falls back to default extractive summary when no query or no relevant chunks
+   - 320-char cap applied as defense in depth
+
+3. **Updated `pipeline.py`**:
+   - `_summarize()` passes `query` through to extractor
+   - `_one()` passes query to `_summarize()`
+   - `run()` passes query to each `_one()` task
+
+4. **Updated `cli.py`**:
+   - `Extractor.extract()` now forwards `query` parameter
+
+5. **Fixed test file `tests/test_pipeline.py`**:
+   - `FakeExtractor.extract()` signature updated to accept `query` parameter
+
+6. **Updated tests in `tests/test_phase9_fixtures.py`**:
+   - `test_d8_answer_in_later_paragraph`: query "what version is stable" finds "3.12" in summary
+   - `test_d9_typo_query_finds_relevant_content`: fuzzy matching finds "version" from "verstion" typo
+
+All tests pass. `make check` → 635 passed, 6 skipped.
+
 
 
 

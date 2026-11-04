@@ -184,7 +184,7 @@ class Pipeline:
         semaphore = asyncio.Semaphore(self.concurrency)
         before = self._whitelisted()
         tasks = [
-            asyncio.create_task(self._one(hit, rank, semaphore, on_event))
+            asyncio.create_task(self._one(hit, rank, semaphore, on_event, query=query))
             for rank, hit in enumerate(usable, start=1)
         ]
         # gather with return_exceptions: a per-URL failure is already handled, so
@@ -220,6 +220,7 @@ class Pipeline:
         rank: int,
         semaphore: asyncio.Semaphore,
         on_event: t.Callable[[Event], None] | None,
+        query: str = "",
     ) -> Result:
         """Fetch and extract one URL. Never raises."""
         async with semaphore:
@@ -232,7 +233,7 @@ class Pipeline:
                     hit,
                     rank,
                     fetched,
-                    await self._summarize(fetched, url=hit.url, search_title=hit.title),
+                    await self._summarize(fetched, url=hit.url, search_title=hit.title, query=query),
                 )
             self._emit(
                 Event(
@@ -291,7 +292,11 @@ class Pipeline:
             )
 
     async def _summarize(
-        self, fetched: FetchResult, url: str = "", search_title: str = ""
+        self,
+        fetched: FetchResult,
+        url: str = "",
+        search_title: str = "",
+        query: str = "",
     ) -> tuple[str, str]:
         """Heading and summary from the router's markdown. Never raises.
 
@@ -308,6 +313,7 @@ class Pipeline:
                 title=fetched.heading,
                 url=url,
                 search_title=search_title,
+                query=query if query else None,
             )
         except Exception:  # noqa: BLE001 - a bad extraction degrades to snippet
             return fetched.heading, fetched.summary

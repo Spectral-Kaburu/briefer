@@ -615,6 +615,7 @@ class Extractor:
         title: str | None = None,
         url: str = "",
         search_title: str = "",
+        query: str | None = None,
     ) -> Extracted:
         return extract(
             markdown,
@@ -622,6 +623,7 @@ class Extractor:
             sentences=self.sentences,
             url=url,
             search_title=search_title,
+            query=query,
         )
 
 

@@ -122,6 +122,7 @@ class FakeExtractor:
         title: str | None = None,
         url: str = "",
         search_title: str = "",
+        query: str | None = None,
     ) -> object:
         self.seen.append(markdown)
         if self._raises is not None:

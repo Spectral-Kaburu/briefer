@@ -194,11 +194,15 @@ def extract(
     sentences: int = 2,
     url: str = "",
     search_title: str = "",
+    query: str | None = None,
 ) -> Extracted:
     """Extract a heading and an extractive summary from page content.
 
     `title` is the metadata title from the page, which wins over first h1 when
     relevant. `url` and `search_title` are used for heading sanity rules (T9.2).
+
+    `query` enables query-aware extraction (T9.3): with a query, returns the
+    best 1-2 chunks that answer the question, capped at 320 characters.
 
     A 320-character cap is applied as defense in depth (T9.1).
     """
@@ -206,6 +210,31 @@ def extract(
     cleaned = clean_markdown(markdown)
 
     heading, _ = _select_heading(cleaned, title or "", url, search_title)
+
+    if query:
+        # Query-aware extraction: rank chunks by relevance
+        from briefing.relevance import rank_chunks, split_into_chunks
+
+        chunks = split_into_chunks(cleaned)
+        if chunks:
+            scored = rank_chunks(chunks, query, url)
+            # Take top 1-2 chunks within the cap
+            selected_texts = []
+            for chunk, score in scored:
+                if score > 0:  # Only consider chunks with some relevance
+                    selected_texts.append(chunk)
+                    if len(selected_texts) >= 2:
+                        break
+
+            if selected_texts:
+                summary = " ".join(selected_texts)
+                # Apply cap as defense in depth (same 320 char cap from T9.1)
+                if len(summary) > _SUMMARY_CAP_CHARS:
+                    cut = summary[:_SUMMARY_CAP_CHARS].rsplit(None, 1)[0]
+                    summary = cut + "..."
+                return Extracted(heading=heading, summary=summary)
+
+    # Default extractive summarisation (without query)
     summary = _summarise(cleaned, sentences)
     # Apply cap as defense in depth
     if len(summary) > _SUMMARY_CAP_CHARS:
