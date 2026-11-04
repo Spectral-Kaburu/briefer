@@ -1,0 +1,346 @@
+#!/usr/bin/env python3
+"""
+Briefing Get Acquainted Script
+
+This script provides an interactive tour of briefing's features,
+running safe demonstrations that don't require API keys or voice-tts.
+
+Usage:
+    python bin/briefing-get-acquainted.py
+"""
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+def print_header(title: str) -> None:
+    """Print a formatted section header."""
+    print(f"\n{'─' * 60}")
+    print(f"  {title}")
+    print('─' * 60)
+
+
+def print_code(code: str) -> None:
+    """Print code block."""
+    print(f"\n    {code}")
+
+
+def run_safely(cmd: list[str], description: str, env: dict[str, str] | None = None) -> bool:
+    """Run a command safely with error handling."""
+    print(f"\n▶  {description}")
+    print(f"   Command: {' '.join(cmd)}")
+    print("   Output:")
+
+    run_env = os.environ.copy()
+    if env:
+        run_env.update(env)
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=run_env,
+        )
+        if result.stdout:
+            for line in result.stdout.strip().split("\n"):
+                print(f"     {line}")
+        if result.stderr:
+            for line in result.stderr.strip().split("\n"):
+                print(f"   ⚠ {line}")
+        return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        print("   ⚠ Command timed out")
+        return False
+    except FileNotFoundError:
+        print(f"   ⚠ Command not found: {cmd[0]}")
+        return False
+
+
+def tour_help() -> dict[str, str]:
+    """Tour the main help system."""
+    print_header("MAIN HELP")
+
+    print("""
+briefing is a web search and extraction CLI with these modes:
+
+  research    - Search the web, extract pages, show results
+  ask         - Search, extract, and generate a concise answer
+  run         - The morning briefing (headlines, synthesis, delivery)
+  whitelist   - Manage domain whitelist
+  status      - Check system health and configuration
+  config      - Show effective configuration
+""")
+
+    print_code("briefing --help")
+
+    result = run_safely([".venv/bin/briefing", "--help"], "Main help")
+    return {"command": "briefing --help", "success": result}
+
+
+def tour_research_mode() -> dict[str, str]:
+    """Tour research mode."""
+    print_header("RESEARCH MODE")
+
+    print("""
+Research mode searches the web and extracts pages.
+
+Usage examples:
+""")
+    print_code("briefing -r \"latest python news\"                    # shorthand")
+    print_code("briefing research \"latest python news\"             # full command")
+    print_code("briefing research \"kenya economy\" --news           # force news mode")
+    print_code("briefing research \"query\" --no-api -n 3           # no API, 3 results")
+    print_code("briefing research \"query\" --json                  # machine-readable")
+    print_code("briefing research \"query\" --plain                  # no colors")
+
+    flags = """
+Key flags:
+  -n, --results N      Number of results to fetch
+  --time day|week|month|any   Recency window
+  --news / --web       Force search mode
+  --llm                Gemini summary (requires API key)
+  --synth              Overall synthesis (requires API key)
+  --no-api             Skip cloud Firecrawl API
+  --json               Machine-readable output
+  --plain              No ANSI color codes
+  --verbose            Log each routing decision
+"""
+    print(flags)
+
+    print("\nDemo: Research mode with --no-api (safe offline demo)")
+
+    result = run_safely(
+        [".venv/bin/briefing", "research", "python version", "--no-api", "-n", "1", "--plain"],
+        "Research with 1 result, plain output",
+        {"BRIEFING_STATE_DIR": ".smoke-state"},
+    )
+
+    return {"command": "briefing research", "success": result}
+
+
+def tour_ask_mode() -> dict[str, str]:
+    """Tour ask mode."""
+    print_header("ASK MODE")
+
+    print("""
+Ask mode search+extract+summarize into a concise answer.
+
+Without a Gemini API key, ask returns passages from fetched pages
+with a warning. Never fabricates an answer.
+
+Usage examples:
+""")
+    print_code("briefing -a \"what is python 3.12?\"                # shorthand")
+    print_code("briefing ask \"what is python 3.12?\"              # full command")
+    print_code("briefing ask \"query\" --pages 2 --no-api           # limit pages, no API")
+    print_code("briefing ask \"query\" --json                      # machine-readable")
+    print_code("briefing ask \"news item\" --news                  # force news mode")
+
+    flags = """
+Key flags:
+  --pages N            Maximum pages to include
+  --time day|week|month|any    Recency window
+  --news / --web       Force search mode
+  --no-api             Skip cloud Firecrawl API
+  --json               Machine-readable output
+  --plain              No ANSI color codes
+"""
+    print(flags)
+
+    print("\nDemo: Ask mode with --no-api (shows passages view)")
+
+    result = run_safely(
+        [".venv/bin/briefing", "ask", "what is python 3.12?", "--no-api", "--plain"],
+        "Ask mode without Gemini key",
+        {"BRIEFING_STATE_DIR": ".smoke-state"},
+    )
+
+    return {"command": "briefing ask", "success": result}
+
+
+def tour_whitelist() -> dict[str, str]:
+    """Tour whitelist management."""
+    print_header("WHITELIST MANAGEMENT")
+
+    print("""
+Domains are auto-whitelisted when local extraction hits a barrier
+(captcha, 403, 429, empty content). Cloud API is only used where it
+can help.
+
+You can manage the whitelist manually:
+""")
+
+    print_code("briefing whitelist list                 # show all entries")
+    print_code("briefing whitelist add example.com --reason manual  # add with reason")
+    print_code("briefing whitelist remove example.com     # remove entry")
+    print_code("briefing whitelist prune                  # remove old auto entries")
+
+    print("\nDemo: Whitelist list (usually starts empty)")
+
+    result = run_safely(
+        [".venv/bin/briefing", "whitelist", "list"],
+        "List whitelist entries",
+        {"BRIEFING_STATE_DIR": ".smoke-state"},
+    )
+
+    return {"command": "briefing whitelist list", "success": result}
+
+
+def tour_status() -> dict[str, str]:
+    """Tour status command."""
+    print_header("SYSTEM STATUS")
+
+    print("""
+briefing status shows the health of all components:
+""")
+
+    print_code("briefing status")
+
+    print("\nDemo: Status check")
+
+    result = run_safely(
+        [".venv/bin/briefing", "status"],
+        "Check system status",
+        {"BRIEFING_STATE_DIR": ".smoke-state"},
+    )
+
+    return {"command": "briefing status", "success": result}
+
+
+def tour_config() -> dict[str, str]:
+    """Tour config command."""
+    print_header("CONFIGURATION")
+
+    print("""
+briefing config shows your current settings and where they come from.
+
+Configuration precedence (first that exists wins):
+  1. --config PATH       (explicit file)
+  2. $BRIEFING_CONFIG   (environment variable)
+  3. ~/.config/briefing/briefing.yaml
+  4. Built-in defaults
+
+Use BRIEFING_STATE_DIR to change where state is stored.
+""")
+
+    print_code("briefing config")
+
+    print("\nDemo: Show effective configuration")
+
+    result = run_safely(
+        [".venv/bin/briefing", "config"],
+        "Show effective config",
+        {"BRIEFING_STATE_DIR": ".smoke-state"},
+    )
+
+    return {"command": "briefing config", "success": result}
+
+
+def tour_environment_variables() -> dict[str, str]:
+    """Tour environment variables."""
+    print_header("ENVIRONMENT VARIABLES")
+
+    print("""
+briefing uses these environment variables:
+
+For configuration paths:
+  BRIEFING_CONFIG       Override default config file location
+  BRIEFING_STATE_DIR    Override default state directory (~/.local/state/briefing/)
+
+For API keys (names, not values, go in config.yaml):
+  FIRECRAWL_API_KEY     Cloud API key (fallback for barriers)
+  GEMINI_API_KEY        Gemini key for --llm and --synth
+
+Example:
+""")
+    print_code("export FIRECRAWL_API_KEY='your-key'")
+    print_code("export BRIEFING_STATE_DIR=/path/to/state")
+    print_code("briefing -r \"query\" --no-api")
+
+    return {"command": "env", "success": True}
+
+
+def tour_json_output() -> dict[str, str]:
+    """Demonstrate JSON output."""
+    print_header("MACHINE-READABLE OUTPUT")
+
+    print("""
+Use --json for scripts and automation:
+""")
+
+    print_code("briefing config --json")
+    print_code("briefing research \"query\" --json | jq '.found'")
+
+    print("\nDemo: Research with JSON output")
+
+    result = run_safely(
+        [".venv/bin/briefing", "research", "python", "--no-api", "-n", "1", "--json"],
+        "Research with JSON output",
+        {"BRIEFING_STATE_DIR": ".smoke-state"},
+    )
+
+    return {"command": "briefing ... --json", "success": result}
+
+
+def main() -> int:
+    """Run the get acquainted tour."""
+    print("""
+╔══════════════════════════════════════════════════════════════════╗
+║              BRIEFING: GET ACQUAINTED TUTORIAL                   ║
+║                                                                  ║
+║  This interactive tour shows you the main features.              ║
+║  All demos use --no-api to avoid requiring real API keys.        ║
+╚══════════════════════════════════════════════════════════════════╝
+""")
+
+    # Check prerequisites
+    venv_python = Path(".venv/bin/python")
+    if not venv_python.exists():
+        print("⚠ Virtual environment not found. Creating...")
+        subprocess.run([sys.executable, "-m", "venv", ".venv"])
+        subprocess.run([".venv/bin/pip", "install", "-e", ".", "-q"])
+
+    results = []
+
+    # Run tours
+    results.append(("Help System", tour_help()))
+    results.append(("Status", tour_status()))
+    results.append(("Config", tour_config()))
+    results.append(("Research Mode", tour_research_mode()))
+    results.append(("Ask Mode", tour_ask_mode()))
+    results.append(("Whitelist", tour_whitelist()))
+    results.append(("Environment Variables", tour_environment_variables()))
+    results.append(("JSON Output", tour_json_output()))
+
+    # Summary
+    print_header("TOUR COMPLETE")
+
+    print("\nAll demos completed.\n")
+
+    success_count = sum(1 for _, r in results if r.get("success"))
+    print(f"Successful demos: {success_count}/{len(results)}")
+
+    print("""
+Next steps:
+  1. Run: briefing --help           - see all commands
+  2. Run: briefing status           - check your setup
+  3. Run: briefing config           - see your config
+  4. Read: README.md                - detailed documentation
+  5. Set: FIRECRAWL_API_KEY (optional, for cloud fallback)
+  6. Set: GEMINI_API_KEY (optional, for LLM features)
+
+For development:
+  - make check      - run all tests
+  - make live       - run live integration tests (requires BRIEFING_LIVE=1)
+  - scripts/render_samples.py - regenerate sample output
+""")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

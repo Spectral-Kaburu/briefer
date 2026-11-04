@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+"""
+Briefing Setup Script
+
+This script helps you set up the briefing CLI by:
+1. Explaining the required environment (Python 3.11+, local Firecrawl)
+2. Explaining storage locations and configuration
+3. Explaining required API keys
+4. Generating a sample configuration file
+
+Usage:
+    python bin/briefing-setup.py
+"""
+
+import os
+import sys
+from pathlib import Path
+
+
+def print_header(title: str) -> None:
+    """Print a formatted section header."""
+    print(f"\n{'=' * 60}")
+    print(f"  {title}")
+    print('=' * 60)
+
+
+def explain_prerequisites() -> None:
+    """Explain system prerequisites."""
+    print_header("PREREQUISITES")
+
+    print("""
+The briefing CLI requires:
+
+1. Python 3.11 or newer
+   - Check: python3 --version
+
+2. A running local Firecrawl instance
+   - Install: git clone https://github.com/firecrawl/firecrawl
+   - Start:  cd firecrawl && docker compose up -d
+   - Verify: curl -s http://localhost:3002/ | head -1
+
+   The local Firecrawl extracts page content from search results.
+   Without it, briefing falls back to search snippets only.
+
+3. (Optional) Google Gemini API key for LLM-powered summaries
+   - Enables: --llm per-page summaries, --synth overall synthesis
+   - Get key from: https://aistudio.google.com/app/apikey
+   - Required env var: GEMINI_API_KEY
+""")
+
+
+def explain_storage() -> None:
+    """Explain where briefing stores data."""
+    print_header("STORAGE LOCATIONS")
+
+    print("""
+Briefing stores data in several locations:
+
+1. Configuration File: ~/.config/briefing/briefing.yaml
+   - Not created by default; copy from config/briefing.yaml.example
+   - Contains all settings (search, firecrawl, gemini, etc.)
+   - Override with BRIEFING_CONFIG env var
+
+2. State Directory: ~/.local/state/briefing/
+   - Whitelist: whitelist.yaml (domains auto-added for barriers)
+   - Dedup store: seen_headlines.json (prevents re-briefing)
+   - Call log: api_calls.jsonl (daily Firecrawl API usage)
+   - Log file: briefing.log
+   - Override with BRIEFING_STATE_DIR env var
+
+3. Project-local state (for testing):
+   - Use: BRIEFING_STATE_DIR=.smoke-state briefing ...
+   - Automatically gitignored
+""")
+
+
+def explain_api_keys() -> None:
+    """Explain API key requirements."""
+    print_header("API KEYS AND CONFIGURATION")
+
+    print("""
+Two types of keys are supported:
+
+1. Firecrawl API Key (FIRECRAWL_API_KEY)
+   - Purpose: Cloud fallback for pages local Firecrawl cannot extract
+   - Used only when local extraction hits a barrier (captcha, 403, 429)
+   - Key is read at call time, never logged or committed
+   - Set limit: config.firecrawl.api.daily_limit (default: 20/day)
+
+2. Gemini API Key (GEMINI_API_KEY)
+   - Purpose: LLM-powered per-page summaries (--llm) and synthesis (--synth)
+   - Required for: briefing run synthesis, briefing research --llm/--synth
+   - Model: gemini-2.5-flash (configurable)
+   - No key = extractive summary only (offline, instant)
+
+Configuration file structure:
+""")
+    print("    # In ~/.config/briefing/briefing.yaml")
+    print("    firecrawl:")
+    print("      api:")
+    print("        key_env: FIRECRAWL_API_KEY  # Name of env var, not the key")
+    print()
+    print("    briefing:")
+    print("      gemini:")
+    print("        api_key_env: GEMINI_API_KEY")
+    print("        model: gemini-2.5-flash")
+
+
+def explain_dependencies() -> None:
+    """Explain Python dependencies."""
+    print_header("PYTHON DEPENDENCIES")
+
+    print("""
+Install with: pipx install -e .  OR  python -m venv .venv && .venv/bin/pip install -e .
+
+Core dependencies (always installed):
+  - typer      : CLI framework
+  - rich       : Terminal UI rendering
+  - httpx      : Async HTTP client
+  - ddgs       : DuckDuckGo search
+  - pydantic   : Configuration validation
+  - PyYAML     : Configuration file parsing
+  - platformdirs: User config/state directories
+
+Optional dependencies (for LLM features):
+  - pipx install -e ".[llm]"
+  - google-genai: Gemini API client
+
+Development dependencies:
+  - pipx install -e ".[dev]"
+  - pytest, pytest-asyncio, respx (testing)
+  - ruff (linting/formatting)
+""")
+
+
+def generate_config_example() -> None:
+    """Generate a sample configuration file."""
+    print_header("SAMPLE CONFIGURATION")
+
+    config_dir = Path.home() / ".config" / "briefing"
+
+    if config_dir.exists():
+        existing = config_dir / "briefing.yaml"
+        if existing.exists():
+            print(f"""
+A configuration file already exists at:
+  {existing}
+
+To see your effective configuration, run:
+  briefing config
+
+To use the example from the repo:
+  cp /home/spectre/Documents/morning/config/briefing.yaml.example {existing}
+"""
+            )
+            return
+
+    example_path = Path("/home/spectre/Documents/morning/config/briefing.yaml.example")
+
+    print(f"""
+Creating a sample configuration file at:
+  {config_dir}/briefing.yaml
+
+This will create directories and copy the example config.
+Do you want to proceed? [y/N]: """, end="", flush=True)
+
+    try:
+        response = input().strip().lower()
+    except EOFError:
+        response = "n"
+
+    if response == "y":
+        config_dir.mkdir(parents=True, exist_ok=True)
+        import shutil
+
+        shutil.copy(example_path, config_dir / "briefing.yaml")
+        print(f"""
+Created: {config_dir}/briefing.yaml
+
+Edit this file to customize your settings. Key settings:
+
+  search.region: Set to your preferred DDG region (e.g., us-en, uk-en)
+  firecrawl.local.base_url: Usually http://localhost:3002
+  firecrawl.api.daily_limit: How many API calls per day before degradation
+  briefing.gemini.api_key_env: GEMINI_API_KEY (name of env var)
+  ask.deadline_s: Timeout for ask mode (10 seconds)
+
+Note: API keys are NOT stored in this file. They come from environment
+variables named in the config (FIRECRAWL_API_KEY, GEMINI_API_KEY).
+"""
+        )
+    else:
+        print("""
+Skipped. You can manually copy the example:
+
+  cp config/briefing.yaml.example ~/.config/briefing/briefing.yaml
+
+The file will be read automatically on the next briefing run.
+""".replace("config/briefing.yaml.example", str(example_path)))
+
+
+def main() -> int:
+    """Run the setup script."""
+    print("""
+╔══════════════════════════════════════════════════════════════════╗
+║                   BRIEFING SETUP SCRIPT                           ║
+║                                                                   ║
+║  This script explains how to configure and run the briefing CLI  ║
+╚══════════════════════════════════════════════════════════════════╝
+""")
+
+    # Check Python version
+    py_version = sys.version_info
+    if py_version < (3, 11):
+        print(f"WARNING: Python {py_version.major}.{py_version.minor} detected.")
+        print("         briefing requires Python 3.11 or newer.\n")
+
+    explain_prerequisites()
+    explain_storage()
+    explain_api_keys()
+    explain_dependencies()
+    generate_config_example()
+
+    print_header("QUICK START")
+
+    print("""
+1. Install:
+   pipx install -e .
+
+2. Start local Firecrawl:
+   cd firecrawl && docker compose up -d
+
+3. Get a Gemini API key (optional, for LLM features):
+   Visit https://aistudio.google.com/app/apikey
+
+4. Set keys (if using):
+   export FIRECRAWL_API_KEY="your-key"
+   export GEMINI_API_KEY="your-key"
+
+5. Test:
+   briefing status
+   briefing -r "latest python news" --no-api
+   briefing -a "what is python 3.12?" --no-api
+
+For more help:
+   briefing --help
+   briefing research --help
+   briefing ask --help
+   briefing config
+""")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
