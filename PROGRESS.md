@@ -1471,6 +1471,37 @@ Three things the sabotage checks caught that the tests as first written did not:
 never the greeting. `make check` → 602 passed, 6 skipped; `make live` → 6 passed
 (the local Firecrawl was healthy, unrelated to this task but green).
 
+---
+
+## T8.4 — 2026-11-04 · the region probe found no region better, so `us-en` stays
+
+Added `scripts/probe_region.py` + `make probe-region`, and ran it six times. The
+network was not refused, so T8.4's `wt-wt` fallback never applied. Result: `ke-en`,
+`wt-wt` and `us-en` all returned the **same five US hosts** (`21alivenews.com`,
+`broadwayworld.com`, `missoulian.com`, `sports.yahoo.com`, `yahoo.com`) with
+**zero `.ke` hosts in any region, in any round**. The `DDGSException("No results
+found.")` failures were per-request and random, hitting different regions on
+different rounds — early on they looked region-shaped (once `ke-en`+`wt-wt` both
+failed while `us-en` returned 10), and a later round where `us-en` failed and the
+other two returned 10 disproved that. That was the useful part: the tail was the
+only thing stopping me recording a spurious "ke-en is unreliable" finding.
+
+So no region scored. Changing `us-en` → `ke-en` because the briefing is Kenyan
+would be a change with no measured effect, so the default stays `us-en` (also
+ddgs's own, `ddgs/ddgs.py:141`) — recorded as **D27**. `NOTES-APIS.md` §4 now
+carries the eight `file:line` facts (verified against the installed package:
+`region` is a verbatim passthrough to DDG's `l` in `engines/duckduckgo.py:33` and
+`engines/duckduckgo_news.py:48`; `brave.py:38`/`google.py:62` `split("-")` it; no
+validation anywhere) plus the result table. `config/briefing.yaml.example` now
+says changing `region` may not help; README already showed `us-en`. Left for the
+owner, not fixed here: a Kenya query still returns US syndication, and the real
+lever is the query wording or a host filter, not `region`.
+
+`make check` → 602 passed, 6 skipped; `test_shipped_example_config_loads` green.
+Verified with the `verifier` subagent, which independently re-read the installed
+ddgs source and confirmed all eight `file:line` citations before agreeing with
+the null-result reading of the *Accept* line.
+
 
 
 
