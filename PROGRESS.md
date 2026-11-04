@@ -2290,3 +2290,18 @@ All 677 tests pass, `make check` green.
 - Task marked complete with note: "probed, not worth it (50% hit rate, false positives)"
 - `knowledge/ddg_instant.py` intentionally not created
 
+### T10.5 — 2026-11-05 · Source routing for ask mode
+
+**Created `src/briefing/knowledge/route.py`:**
+- Pure `choose_sources(question) -> list[str]` function
+- Encyclopedic patterns select `["WIKI"]` (what is, who is, define, history of, when was, meaning of, capital of)
+- Developer patterns select `["SO"]` (error, exception, Traceback, how do i, how to, ::, code, function, method, library, module, package, import, install, syntax, debug, in python/javascript/java/c++/go/rust)
+- News-mode patterns select `[]` (latest, breaking, today, news)
+- Questions with both patterns return `["WIKI", "SO"]`
+
+**Created `tests/test_route.py`:**
+- 29 parametrized test cases covering all patterns and edge cases
+- Tests for encyclopedic selections, developer selections, dual matches, news-mode filtering
+- Tests for typos, empty input, whitespace, case insensitivity
+- All tests pass, `make check` green
+
