@@ -2265,3 +2265,28 @@ All 677 tests pass, `make check` green.
 - Tests for `KnowledgeConfig` defaults and overrides
 - All tests pass, `make check` green
 
+### T10.2 — 2026-11-05 · Wikipedia adapter implementation
+
+**Created `src/briefing/knowledge/wikipedia.py`:**
+- OpenSearch fuzzy search (`limit=3`) → REST summary API
+- Disambiguation pages skipped via `type` check
+- HTTPS URLs validated against `*.wikipedia.org` host
+- CC BY-SA 4.0 license, author from page `title` field
+- 18 tests in `tests/test_wikipedia.py`: success, disambiguation, 404, 429, 500, timeout, malformed JSON, non-dict shape, region mapping
+
+### T10.3 — 2026-11-05 · Stack Exchange adapter implementation
+
+**Created `src/briefing/knowledge/stackexchange.py`:**
+- Search advanced API (`accepted=True`, `page_size=3`) → batched answers API
+- HTML-to-text conversion: code blocks kept (capped at 600 chars), images dropped, script tags stripped
+- `author` from `owner.display_name`, `license` CC BY-SA 4.0
+- `quota_floor` (default 20) stops calls when near limit; `backoff` field honored across calls
+- Stack Exchange key added to `SecretFilter` in `cli.py:_configure_logging()` to prevent log leaks
+- 17 tests in `tests/test_stackexchange.py`: all pass, `make check` green
+
+### T10.4 — 2026-11-05 · DDG Instant Answer
+
+**Status**: Probed, not worth it (50% hit rate, false positives documented in NOTES-APIS.md §5.4)
+- Task marked complete with note: "probed, not worth it (50% hit rate, false positives)"
+- `knowledge/ddg_instant.py` intentionally not created
+
