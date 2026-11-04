@@ -22,6 +22,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
+from briefing.ask import Answer
 from briefing.briefing import DedupStore, FileAudioState, FileSessionSummary, Gate, TopicFilter
 from briefing.config import (
     Config,
@@ -40,7 +41,7 @@ from briefing.fetch.router import Router
 from briefing.log import configure as configure_logging
 from briefing.log import get_logger
 from briefing.pipeline import Pipeline, Report
-from briefing.search import Searcher
+from briefing.search import Searcher, SearchResult
 from briefing.synth import Gemini, ResearchSynth, Speaker
 from briefing.ui import UI, answer
 from briefing.whitelist import Whitelist, WhitelistEntry, normalize_host
@@ -110,6 +111,254 @@ _AUDIO = _audio
 _DEDUP = _dedup
 _SUMMARIZER = _summarizer
 
+# _ASK is the ask implementation that can be swapped by tests.
+# It accepts CLI parameters and returns an Answer.
+
+
+def _searcher_for_ask(loaded: Config, mode: str | None, no_api: bool) -> Searcher:
+    """Create a Searcher for ask mode sharing the same configuration as research."""
+    return Searcher(
+        region=loaded.search.region,
+        max_results=loaded.search.results,
+        backup=FirecrawlSearch(
+            base_url=loaded.firecrawl.local.base_url,
+            timeout_s=loaded.firecrawl.local.timeout_s,
+        ),
+        mode=mode,
+    )
+
+
+async def _ask_implementation(
+    query: str,
+    *,
+    news: bool = False,
+    web: bool = False,
+    time: str | None = None,
+    pages: int = 3,
+    no_api: bool = False,
+    config: str | None = None,
+) -> Answer:
+    """Build collaborators and call ask.ask (the real implementation).
+
+    This is the actual ask implementation that tests don't patch - they patch
+    _ASK instead.
+    """
+    from briefing.ask import ask
+
+    loaded = _load(config)
+
+    mode = _mode_for(news, web)
+
+    # Create searcher
+    searcher = _searcher_for_ask(loaded, mode, no_api)
+    if time is not None:
+        searcher.timelimit = _timelimit(time)
+
+    # Build components
+    whitelist = _whitelist(loaded)
+    router = _router(loaded, no_api, whitelist)
+
+    async def _fetch_hit(hit: SearchResult) -> tuple[str, str, str]:
+        """Fetch a single hit through the router."""
+        result = await router.fetch(hit.url, hit.snippet or "", hit.title or "", hit.source)
+        return result.heading, result.summary, hit.snippet or ""
+
+    # Create a simple async wrapper for search
+    async def _search_hits(q: str) -> list[SearchResult]:
+        return await searcher.search(q)
+
+    # Build extractor
+    extractor = Extractor(loaded.summary.sentences)
+
+    # Resolve Gemini key for the model
+    gemini_key = resolve_gemini_key(loaded, os.environ)
+    model: t.Callable[[str, str], t.Awaitable[str | None]] | None = None
+    if gemini_key:
+        from briefing.synth import Gemini
+
+        llm = Gemini()
+
+        async def _model(prompt: str, query: str) -> str | None:
+            """Call the Gemini model."""
+            try:
+                return await llm.generate(prompt)
+            except Exception:  # noqa: BLE001
+                return None
+
+        model = _model
+
+    # Call the ask function from ask.py
+    return await ask(
+        query=query,
+        search=_search_hits,
+        fetch=_fetch_hit,
+        extract=extractor.extract,
+        model=model,
+        results=loaded.ask.results,
+        pages=pages,
+        per_url_s=loaded.timeouts.per_url_s,
+        deadline_s=loaded.ask.deadline_s,
+    )
+
+
+# The seam that tests patch - starts as the real implementation
+_ASK = _ask_implementation
+
+
+def _ask(
+    query: str,
+    *,
+    pages: int = 3,
+    time: str | None = None,
+    news: bool = False,
+    web: bool = False,
+    no_api: bool = False,
+    json_out: bool = False,
+    plain: bool | None = None,
+    config: str | None = None,
+    verbose: bool = False,
+) -> None:
+    """Ask a question and get an answer with numbered sources."""
+    if news and web:
+        _fail(
+            "--news and --web both set the search mode.",
+            "Pick one: drop --news, or drop --web.",
+        )
+
+    loaded = _load(config)
+    _configure_logging(loaded, verbose)
+
+    result: Answer = asyncio.run(
+        _ASK(
+            query=query,
+            pages=pages,
+            time=time,
+            news=news,
+            web=web,
+            no_api=no_api,
+            config=config,
+        )
+    )
+
+    # Render the output
+    if json_out:
+        typer.echo(json.dumps(_answer_as_json(result), indent=2))
+    else:
+        _render_answer(result, plain=plain)
+
+
+def _render_answer(answer: Answer, *, plain: bool | None = None) -> None:
+    """Render an Answer as a panel with numbered sources and a footer.
+
+    The output is:
+    1. Answer panel (the text field, possibly from model or passages)
+    2. Numbered source list (domain, title, URL, method badge)
+    3. Footer with timings and warnings
+    """
+    from rich import box
+    from rich.panel import Panel
+    from rich.text import Text
+
+    console = Console(stderr=(plain is True), width=100) if plain else Console(width=100)
+    if plain:
+        console.no_color = True
+
+    # 1. Answer panel
+    answer_panel = Panel(
+        Text(answer.text),
+        title="Answer",
+        box=box.SIMPLE if plain else box.ROUNDED,
+        expand=True,
+    )
+    console.print(answer_panel)
+
+    # 2. Numbered source list
+    if answer.sources:
+        console.print()
+        for num, title, url, domain, method, text in answer.sources:
+            # Build method badge
+            if method == "LOCAL":
+                badge_text = Text("LOCAL", "green")
+            elif method == "API":
+                badge_text = Text("API", "yellow")
+            else:
+                badge_text = Text("SNIPPET", "dim")
+
+            line = Text()
+            line.append(f"[{num}] ", "bold")
+            line.append(title or "(no title)")
+            line.append("  ", "dim")
+            line.append(badge_text)
+            console.print(line)
+
+    # 3. Footer with timings and warnings
+    footer_parts = []
+
+    # Source counts by method
+    local_count = sum(1 for s in answer.sources if s[4] == "LOCAL")
+    api_count = sum(1 for s in answer.sources if s[4] == "API")
+    snippet_count = sum(1 for s in answer.sources if s[4] == "SNIPPET")
+
+    if local_count or api_count:
+        counts_parts = []
+        if local_count:
+            counts_parts.append(f"{local_count} local")
+        if api_count:
+            counts_parts.append(f"{api_count} API")
+        if snippet_count:
+            counts_parts.append(f"{snippet_count} snippet")
+        footer_parts.append(" · ".join(counts_parts))
+
+    if answer.used_llm:
+        method_desc = "LLM"
+    else:
+        method_desc = "passages"
+    footer_parts.append(f"{len(answer.sources)} sources ({method_desc})")
+
+    if answer.timings:
+        timing_parts = []
+        if "search" in answer.timings:
+            timing_parts.append(f"search: {answer.timings['search']:.1f}s")
+        if "fetch" in answer.timings:
+            timing_parts.append(f"fetch: {answer.timings['fetch']:.1f}s")
+        if "model" in answer.timings:
+            timing_parts.append(f"model: {answer.timings['model']:.1f}s")
+        if timing_parts:
+            footer_parts.append(" · " + " · ".join(timing_parts))
+
+    if answer.warnings:
+        footer_parts.append(" · " + "; ".join(answer.warnings))
+
+    if footer_parts:
+        footer_panel = Panel(
+            Text(" · ".join(footer_parts), "dim"),
+            box=box.SIMPLE,
+            expand=True,
+        )
+        console.print(footer_panel)
+
+
+def _answer_as_json(answer: Answer) -> dict[str, t.Any]:
+    """Convert an Answer to a JSON-serializable dict."""
+    return {
+        "question": answer.question,
+        "answer": answer.text,
+        "used_llm": answer.used_llm,
+        "sources": [
+            {
+                "number": s[0],
+                "title": s[1],
+                "url": s[2],
+                "domain": s[3],
+                "method": s[4],
+                "passages": s[5],
+            }
+            for s in answer.sources
+        ],
+        "timings": answer.timings,
+        "warnings": answer.warnings,
+    }
+
 
 def _STATE_DIR() -> Path:
     """Where the whitelist, dedup store and API call log live.
@@ -157,7 +406,9 @@ app = typer.Typer(
 )
 
 # `-n` is SPEC section 3's short flag for `--results`; `-r` is reserved for the
-# `research` shorthand on the group, and Typer rejects a duplicate short option.
+# `research` shorthand on the group, and `-a` is reserved for the `ask` shorthand.
+# Typer rejects a duplicate short option.
+# -a/--ask/--instant are the ask mode shorthands per D10.
 
 
 @app.callback(invoke_without_command=True)
@@ -166,12 +417,33 @@ def main(
     research: str | None = typer.Option(
         None, "-r", "--research", metavar="QUERY", help="Shorthand for `briefing research`."
     ),
+    ask_query: str | None = typer.Option(
+        None, "-a", "--ask", "--instant", metavar="QUERY", help="Shorthand for `briefing ask`."
+    ),
 ) -> None:
     """Research the web, or manage a briefing run."""
+    # Check for mutually exclusive shorthand and subcommand (decision D12)
+    # When invoked_subcommand is set, we're being called as part of a subcommand
+    if ctx.invoked_subcommand is not None:
+        if ask_query is not None:
+            _fail(
+                "Cannot use -a/--ask shorthand with 'briefing ask' subcommand.",
+                "Use either -a 'question' or 'briefing ask question', not both.",
+            )
+        if research is not None:
+            _fail(
+                "Cannot use -r/--research shorthand with 'briefing research' subcommand.",
+                "Use either -r 'question' or 'briefing research question', not both.",
+            )
+
     if research is not None:
         # No options: SPEC section 3's shorthand takes a query and nothing else.
         # Extra flags belong to `briefing research`, which is the same operation.
         _research(research)
+        raise typer.Exit()
+    if ask_query is not None:
+        # Ask mode shorthand: -a, --ask, or --instant
+        _ask(ask_query)
         raise typer.Exit()
     if ctx.invoked_subcommand is None:
         # `no_args_is_help` handles a bare `briefing`; reaching here means the
@@ -224,6 +496,47 @@ def research(
         verbose=verbose,
         llm=llm,
         synth=synth,
+    )
+
+
+@app.command()
+def ask(
+    query: str = typer.Argument(..., metavar="QUERY", help="Question to answer."),
+    pages: int = typer.Option(3, "--pages", help="Maximum number of pages to fetch."),
+    time: str | None = typer.Option(None, "--time", help="Recency window: day, week, month, any."),
+    news: bool = typer.Option(False, "--news", help="Force news search mode."),
+    web: bool = typer.Option(False, "--web", help="Force web search mode."),
+    no_api: bool = typer.Option(False, "--no-api", help="Never call the Firecrawl API."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the answer as JSON."),
+    plain: bool | None = typer.Option(None, "--plain/--no-plain", help="Plain text, no color."),
+    verbose: bool = typer.Option(False, "--verbose", help="Log each decision to stderr."),
+    config: str | None = typer.Option(None, "--config", help="Path to a briefing.yaml to load."),
+) -> None:
+    """Answer a question using web search results with numbered sources.
+
+    Ask searches the web, extracts pages, and generates an answer based on the
+    fetched content. Unlike research mode which shows all results, ask mode
+    produces a concise answer with citations.
+
+    Examples:
+
+        briefing ask "what is the current python version?"
+
+        briefing ask "latest news in kenya" --pages 5 --time day
+
+        briefing ask "who won the election?" --news --json
+    """
+    _ask(
+        query,
+        pages=pages,
+        time=time,
+        news=news,
+        web=web,
+        no_api=no_api,
+        json_out=json_out,
+        plain=plain,
+        config=config,
+        verbose=verbose,
     )
 
 

@@ -139,6 +139,22 @@ class TimeoutsConfig(BaseModel):
     transient_backoff_s: float = 0.5
 
 
+class AskConfig(BaseModel):
+    """Ask mode configuration (T9.6).
+
+    Controls the ask mode behavior similar to how the pipeline works for research.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Maximum number of search results to consider for fetching (T9.5).
+    results: int = 6
+    #: Maximum number of pages to fetch and include in the answer.
+    pages: int = 3
+    #: Overall deadline in seconds for all fetches combined (T9.5).
+    deadline_s: float = 10.0
+
+
 class Paths(BaseModel):
     """Every file the CLI owns, all under the state dir so a test moves them all
     at once by overriding it."""
@@ -166,6 +182,7 @@ class Config(BaseModel):
     dedup: DedupConfig = DedupConfig()
     briefing: BriefingConfig = BriefingConfig()
     timeouts: TimeoutsConfig = TimeoutsConfig()
+    ask: AskConfig = AskConfig()
     paths: Paths
 
 

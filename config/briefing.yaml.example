@@ -80,3 +80,12 @@ briefing:
     api_key_env: GEMINI_API_KEY
     # The model to use for generation.
     model: gemini-2.5-flash
+
+# Ask mode configuration (T9.6): for `briefing -a` and `briefing ask`.
+ask:
+  # Maximum search results to consider for fetching.
+  results: 6
+  # Maximum pages to fetch and include in the answer.
+  pages: 3
+  # Overall deadline in seconds for all fetches combined.
+  deadline_s: 10
