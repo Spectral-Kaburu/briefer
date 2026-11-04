@@ -25,6 +25,20 @@ _BOILERPLATE_LINE_MARKERS = (
     "sponsored",
     "share this",
     "skip to content",
+    "skip to article",
+    # Consent banners and collection widgets arrive as one unbroken line of UI
+    # fragments, which interleave too freely for prefix-peeling to finish. These
+    # are long enough that they are near-impossible in prose, so the line is
+    # dropped whole: the summary empties and the UI falls back to the search
+    # snippet, which is the honest result for such a page.
+    "opens in a new window",
+    "opens an external website",
+    "close this consent banner",
+    "manage preferences",
+    "storage preferences",
+    "you are the owner of this collection",
+    "you have permission to edit this collection",
+    "edit collection",
     "toggle navigation",
     "all rights reserved",
     "privacy policy",
@@ -33,6 +47,22 @@ _BOILERPLATE_LINE_MARKERS = (
     "related articles",
     "most read",
     "also read",
+)
+
+# Chrome that shows up as a *prefix* on a line whose tail is the article, and is
+# therefore cut rather than dropped with the line. These are kept apart from the
+# markers above because several are ordinary English: "close by" as a whole-line
+# match would take "the hospital is close by the river" with it, while cutting a
+# leading "Close By" costs at most two words of a sentence that was already UI
+# furniture. Ordered longest-first so "skip to article" wins over "skip to".
+_BOILERPLATE_PREFIXES = (
+    "return to homepage",
+    "skip to main content",
+    "skip to article",
+    "back to top",
+    "top stories",
+    "skip to content",
+    "close by",
 )
 
 # A line is furniture if it is one of these, or if it is mostly links/pipe nav.
@@ -50,6 +80,16 @@ _NAV_SEGMENT_CHARS = 12
 # A line needs at least this many pipe-separated segments to count as a nav bar.
 _NAV_MIN_SEGMENTS = 3
 _HEADING_CHARS = 200
+
+# A markdown horizontal rule, whether its own line or a separator mid-line. `=`
+# is included because a setext heading underline (`Title` / `====`) is the same
+# furniture with a different glyph; `*` and `_` are not, since three of them can
+# still be emphasis inside prose.
+_RULE = re.compile(r"[-=]{3,}")
+# A leading notification/count badge ("0 Search option...", "3 comments").
+_BADGE = re.compile(r"^\d+\s+")
+# A space wedged before punctuation, which dropping a link element leaves behind.
+_PUNCT_SPACE = re.compile(r"\s+([,.;:!?])")
 
 
 class Extracted(t.NamedTuple):
@@ -116,6 +156,34 @@ def _is_nav_bar(line: str) -> bool:
     return all(len(_MARKDOWN_LINK.sub(r"\1", s)) <= _NAV_SEGMENT_CHARS for s in segments)
 
 
+def _split_at_rule(line: str) -> str:
+    """Keep the part of a line that survives a horizontal rule.
+
+    A rule mid-line means the left side was a header block and the right side is
+    the body: "Return to Homepage Top Stories: ------------ The clinic returned".
+    When the rule is the whole line nothing is left, so `""` says "furniture".
+    """
+    parts = [p.strip() for p in _RULE.split(line) if p.strip()]
+    return max(parts, key=len) if parts else ""
+
+
+def _strip_leading_furniture(line: str) -> str:
+    """Peel chrome prefixes off the front of a line, leaving the prose.
+
+    "Skip to Article Close By Millions of..." is two UI phrases with the article
+    behind them, so this repeats while the line still opens with a known prefix
+    rather than testing the line as a whole — which would drop the sentence too.
+    """
+    low = line.lower()
+    for prefix in _BOILERPLATE_PREFIXES:  # already longest-first
+        if low.startswith(prefix):
+            rest = line[len(prefix) :].lstrip(" \t:;,.-")
+            # The lstrip can empty a line that was nothing but chrome; returning
+            # the original then lets the caller keep deciding what it is.
+            return _strip_leading_furniture(rest) if rest else ""
+    return line
+
+
 def _prose_lines(markdown: str) -> list[str]:
     """Content lines with markdown scaffolding and furniture removed.
 
@@ -123,20 +191,36 @@ def _prose_lines(markdown: str) -> list[str]:
     or real content is a whole-document question, answered by `_skip_kickers`.
     """
     lines: list[str] = []
-    for raw in markdown.splitlines():
-        line = raw.strip()
+    raw_lines = [" ".join(raw.split()) for raw in markdown.splitlines()]
+    for index, line in enumerate(raw_lines):
         if not line:
             continue
         if line.startswith("#"):  # a heading is not body prose
             continue
         if line.startswith(("```", "~~~", ">", "- ", "* ", "|", "![")):
             continue
+        # A line sitting directly above a rule is that rule's setext heading, so
+        # the text above is a title and not body prose.
+        following = raw_lines[index + 1] if index + 1 < len(raw_lines) else ""
+        if _RULE.fullmatch(following):
+            continue
+        # Cleaned before the furniture checks, not after: a11y elements arrive as
+        # links ("[Skip to main content](url)"), and a prefix test against the
+        # raw markdown sees a "[" and matches nothing.
+        line = _clean(line)
+        line = _BADGE.sub("", line)
+        line = _split_at_rule(line)
+        if not line:
+            continue
+        line = _strip_leading_furniture(line)
+        if not line:
+            continue
         low = line.lower()
         if any(marker in low for marker in _BOILERPLATE_LINE_MARKERS):
             continue
         if _is_nav_bar(line):
             continue
-        cleaned = _clean(line)
+        cleaned = line
         if not cleaned:
             continue
         lines.append(cleaned)
@@ -144,11 +228,17 @@ def _prose_lines(markdown: str) -> list[str]:
 
 
 def _clean(line: str) -> str:
-    """Strip markdown link scaffolding and emphasis from a line."""
+    """Strip markdown link scaffolding and emphasis from a line.
+
+    Two spacing normalisations follow, because a markdown page carries UI
+    spacing into its own text: a space before punctuation ("commission , Bodum",
+    what removing a link leaves behind) and doubled spaces where an element was.
+    """
     line = _TAG.sub("", line)
     line = _MARKDOWN_LINK.sub(r"\1", line)
     line = _EMPHASIS.sub("", line)
-    return line.strip()
+    line = _PUNCT_SPACE.sub(r"\1", line)
+    return " ".join(line.split())
 
 
 def _split_sentences(line: str) -> list[str]:

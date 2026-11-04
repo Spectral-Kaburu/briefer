@@ -1543,6 +1543,100 @@ One incidental denial is logged in `DENIED.md`: `rm` on the two control-check
 scratch units, which I did not retry; they sit in the job's own `tmp/`, which the
 harness deletes with the job.
 
+---
+
+## T8.7 — 2026-11-04 · first real end-to-end run, and one defect fixed
+
+Ran the smoke sequence from the repo root as written, with all state under
+`.smoke-state/` (gitignored). `briefing run` was **never** invoked, not even with
+`--dry-run`.
+
+### What ran, and what it showed
+
+| Command | Result |
+|---|---|
+| `briefing status` | ✔ local firecrawl, ✘ `FIRECRAWL_API_KEY` not set (correct — the owner's key is intentionally absent), ✔ ddgs, ✔ api usage 0 of 20, ✔ log file |
+| `whitelist add example.com --reason smoke` | `Whitelisted example.com.` |
+| `whitelist list` | `example.com [unverified · manual · 0 api hits] · smoke` |
+| `whitelist remove example.com` | `Removed example.com.`, and `whitelist list` then reports none — state round-trips |
+| `briefing config` | `config file none (built-in defaults)` — no user config is picked up, which is right; precedence itself is T8.3's tests |
+| `research "latest breaking news in kenya" --no-api -n 5 --plain` | 5 found · 3 extracted (3 local) · 2 snippet-only · 17.6s |
+| same with `--json` | `found: 5, succeeded: 4, elapsed_s: 21.25` |
+
+Badges and the footer agree in both runs: 3 LOCAL + 2 SNIPPET = 5 found, and the
+JSON's `succeeded: 4` matches its four `ok: true`. The two SNIPPET cards carry
+`the site had a server error (HTTP 500)` and `error_class: TRANSIENT_5XX` — that
+is SPEC §4's fallback working, not a defect. Timings (15-21s for 5 pages) are
+plausible. **`PLAN.md`'s T8.7 command form was wrong, not the product**: it wrote
+`-r "…" --no-api -n 5 --plain`, and `-r` is the group-level shorthand, which Click
+parses with the group's options only. It exits 2 with `No such option: --no-api`.
+`cli.py:170` documents that boundary deliberately, so the fix was in PLAN.md, and
+`briefing research QUERY <flags>` is the working form.
+
+### Defect list
+
+**FIXED (with tests):**
+
+1. **Navigation chrome opened the summary.** Every card's summary began with the
+   site's own furniture — "Return to Homepage Top Stories: ------------",
+   "Skip to Article Close By", "0 Search option is now available…", a
+   "Title / ====" setext heading, a linked `[Skip to main content](url)`, and in
+   one case a whole card whose summary was *nothing but* a consent banner. This
+   is the one thing T8.7 explicitly asks about and it was failing badly. Root
+   cause: furniture is usually a *prefix on the same line as the prose*, so the
+   existing whole-line marker check (`any(marker in low)`) either dropped the
+   entire article with it or, more often, let the line through intact. Fixed in
+   `extract.py` by adding `_split_at_rule` (a horizontal rule mid-line means the
+   left side was a header block), `_strip_leading_furniture` (peel known chrome
+   prefixes off the front, repeatedly), dropping a line sitting directly above a
+   rule (its setext heading), dropping a rule-only line, a leading `\d+` badge
+   strip, and a split of the markers into two lists: phrases that are safe to
+   drop a whole line on, and phrases that may occur in real prose and are
+   therefore only ever cut as a prefix. "close by" is the reason for the split —
+   as a whole-line match it would have taken "the hospital is close by the river"
+   with it. Two orderings were load-bearing and are worth keeping in mind: the
+   line is *cleaned before* the furniture checks (a prefix test against raw
+   markdown sees a `[` and matches nothing), and whitespace is collapsed first
+   (a11y buttons arrive as "Close  By" with a double space).
+2. **A space before punctuation in every summary** — "Consumer Product Safety
+   Commission , Bodum USA". `_clean` now collapses `\s+([,.;:!?])` and whitespace.
+
+Both were sabotage-verified: reverting `_split_at_rule`/`_strip_leading_furniture`
+made test 1 fail, reverting `" ".join(raw.split())` made the double-space prefix
+case fail, removing `_PUNCT_SPACE` made the punctuation test fail, removing the
+rule lookahead made the setext test fail, and moving `_clean` back after the peel
+made the linked-a11y test fail.
+
+**RECORDED, NOT FIXED (needs its own task):**
+
+3. **A page whose body *is* a nav list.** One Yahoo-syndicated result had a
+   summary that was almost entirely a "Recommended Stories" run of other article
+   titles, complete with `\ \` blockquote artefacts — the markdown for that page
+   is mostly a recommendation block, so the 2-sentence extractive budget was spent
+   on titles. Fixing this means telling an article body from a link list, which is
+   a heuristic that can eat real prose, so it should not be slipped into a config
+   default.
+4. **A long in-page UI run before the prose** ("Search option is now available at
+   TUKO! Feel free to search the content on … in the top right corner ;)"). Not a
+   short prefix; the furniture ends at a `;)` rather than a word the marker list
+   can hold. Same reasoning — deferred.
+5. **`heading` is `""` for every JSON result** while `title` is populated. Looks
+   like design (the card title comes from `title`), but it means the field
+   carries no information for news results and should either be dropped from the
+   JSON or documented.
+6. **URLs wrap mid-token at 78 columns** with no continuation marker, so
+   `https://www.upi.com/Top_News/US/2026/10/30/bodum-french-press-recall/1141793`
+   prints as two lines. Display-only, but it hurts copy-paste.
+7. **3 of 5 results were a US Bodum coffee-maker recall**, unrelated to Kenya.
+   Not a bug — this is T8.4's null result surfacing in real output: the query,
+   not the region, decides the country. Recorded so it is not re-discovered.
+
+`make check` → 612 passed, 6 skipped (602 + 10 new extract tests).
+
+**After the fix, the same command:** cards 3 and 4 open on real prose with no
+chrome at all, and card 2's "Skip to main content" header block is gone. What
+remains on the worst cards is #3 and #4 below, not #1.
+
 
 
 
