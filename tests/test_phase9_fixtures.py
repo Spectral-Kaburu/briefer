@@ -85,12 +85,10 @@ Download it from the official website today."""
     assert "Python 3.12 release" in result.summary
 
 
-@pytest.mark.xfail(strict=True, reason="T9.1 D2.1: link-wrapped images may leak")
 def test_d2_wrapped_image_not_in_summary() -> None:
     """Link-wrapped images ([![alt](url)](url)) should not appear.
 
-    This is a separate defect (D2.1) from plain images - the current code
-    strips `![alt](url)` but not `[![alt](url)](url)`.
+    This is D2.1 - fixed in T9.1.
     """
     md = """# Article
 
@@ -144,15 +142,15 @@ These changes will have wide-reaching implications for developers."""
 
 
 # =============================================================================
-# D4: Concatenated navigation tokens with no spaces (FIXED in T8.7)
+# D4: Concatenated navigation tokens with no spaces (FIXED in T9.1)
 # =============================================================================
 
 # The original defect from T8.7 was about "Return to Homepage Top Stories:
 # ------------" - a prefix that ends with ";)" or runs like "» dev (3.16)3.15.23.14…"
 # T8.7's _strip_leading_furniture now peels prefixes repeatedly.
+# T9.1's clean_markdown drops lines that are mostly non-letters (D4 fixed).
 
 
-@pytest.mark.xfail(strict=True, reason="T9.1: concatenated nav tokens may leak")
 def test_d4_concatenated_navigation_from_T87() -> None:
     """D4 pattern from T8.7: chrome prefix ending in ')' or special chars.
 
@@ -172,11 +170,10 @@ Users can upgrade when they're ready for the changes."""
 
 
 # =============================================================================
-# D5: Flattened tables repeat near-identical segments
+# D5: Flattened tables repeat near-identical segments (FIXED in T9.1)
 # =============================================================================
 
 
-@pytest.mark.xfail(strict=True, reason="T9.1: flattened table content may leak")
 def test_d5_flattened_table_not_in_summary() -> None:
     """Repeated table rows should not leak into summary."""
     md = """# Release Notes
@@ -194,11 +191,10 @@ Users can download it from the official site."""
 
 
 # =============================================================================
-# D6: Summary with no sentence terminators is not length-capped
+# D6: Summary with no sentence terminators is not length-capped (FIXED in T9.1)
 # =============================================================================
 
 
-@pytest.mark.xfail(strict=True, reason="T9.1: uncapped summary not truncated")
 def test_d6_long_run_no_terminators_is_capped() -> None:
     """A long line without sentence terminators must be capped (320 chars default)."""
     md = """# Article

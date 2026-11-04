@@ -80,6 +80,8 @@ _NAV_SEGMENT_CHARS = 12
 # A line needs at least this many pipe-separated segments to count as a nav bar.
 _NAV_MIN_SEGMENTS = 3
 _HEADING_CHARS = 200
+# Summary cap as defence in depth (T9.1)
+_SUMMARY_CAP_CHARS = 320
 
 # A markdown horizontal rule, whether its own line or a separator mid-line. `=`
 # is included because a setext heading underline (`Title` / `====`) is the same
@@ -91,12 +93,96 @@ _BADGE = re.compile(r"^\d+\s+")
 # A space wedged before punctuation, which dropping a link element leaves behind.
 _PUNCT_SPACE = re.compile(r"\s+([,.;:!?])")
 
+# Bare URLs to drop from text (T9.1 D2)
+_BARE_URL = re.compile(r"https?://[^\s]+")
+
+# Link-wrapped images: [![alt](url)](url) - need special handling (T9.1 D2.1)
+_LINK_WRAPPED_IMAGE = re.compile(r"\[!\[[^\]]*\]\([^\)]+\)\]\([^\)]+\)")
+
 
 class Extracted(t.NamedTuple):
     """Heading and short summary for one page."""
 
     heading: str
     summary: str
+
+
+def clean_markdown(text: str) -> str:
+    """Strip furniture and noise from markdown before extraction (T9.1).
+
+    Removes:
+    - Horizontal rules and setext underlines (lines of >=3 dashes/equals)
+    - Image markdown (![alt](url)) and link-wrapped images ([![...]...)](...))
+    - Bare URLs
+    - Navigation bars, cookie banners, and other furniture lines
+    - Lines that are mostly non-letters or long runs without spaces
+    - Collapses repeated segments (D5): lines appearing 3+ times are furniture
+
+    Leaves fenced code blocks intact (just does not use them to lead a summary).
+    Applied before any extraction.
+    """
+    # First pass: identify and mark repeated lines (D5 - flattened tables)
+    # A line appearing 3+ times is considered a table/repeated content, not prose
+    line_counts: dict[str, int] = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            line_counts[stripped] = line_counts.get(stripped, 0) + 1
+
+    # Lines that are repeated 3+ times are furniture
+    repeated_lines = {line for line, count in line_counts.items() if count >= 3}
+
+    lines: list[str] = []
+    raw_lines = text.splitlines()
+    for idx, line in enumerate(raw_lines):
+        # Skip setext underlines / horizontal rules themselves
+        if _RULE.fullmatch(line):
+            continue
+        # Check if this line is ABOVE a rule (setext heading) - skip it
+        if idx + 1 < len(raw_lines) and _RULE.fullmatch(raw_lines[idx + 1]):
+            continue
+        # Skip fenced code blocks
+        if line.strip().startswith(("```", "~~~")):
+            continue
+        # Check for link-only lines BEFORE any processing (D3, T8.7)
+        # Lines that are just links like "[Skip to content](url) [Home](url)" are nav
+        if _LINK_ONLY.match(line):
+            continue
+        # Strip link-wrapped images (T9.1 D2.1) first
+        if _LINK_WRAPPED_IMAGE.search(line):
+            line = _LINK_WRAPPED_IMAGE.sub("", line)
+        # Strip image markdown lines entirely (lines starting with ![])
+        if line.strip().startswith("!["):
+            continue
+        # Unwrap remaining markdown links FIRST, then strip URLs
+        # Order matters: unwrap [text](url) -> text, then strip any remaining bare URLs
+        line = _MARKDOWN_LINK.sub(r"\1", line)
+        # Strip bare URLs (after link unwrapping)
+        line = _BARE_URL.sub("", line)
+        # Normalize whitespace FIRST (so furniture prefix matching works with any spacing)
+        line = " ".join(line.split())
+        # Strip leading furniture prefixes
+        line = _strip_leading_furniture(line)
+        # Skip if empty
+        if not line.strip():
+            continue
+        # Skip lines that are repeated (flattened table pattern - D5)
+        if line in repeated_lines:
+            continue
+        # Skip lines that are mostly non-letters (< 50% letters/spaces)
+        letter_ratio = sum(c.isalpha() or c.isspace() for c in line) / len(line)
+        if letter_ratio < 0.5:
+            continue
+        # Skip lines that contain only furniture markers
+        low = line.lower()
+        if any(marker in low for marker in _BOILERPLATE_LINE_MARKERS):
+            continue
+        # Skip lines that start with furniture prefixes
+        if any(low.startswith(prefix) for prefix in _BOILERPLATE_PREFIXES):
+            continue
+        lines.append(line)
+
+    return "\n\n".join(lines)
 
 
 def extract(
@@ -108,9 +194,19 @@ def extract(
 
     `title` is the metadata title, which wins over the first markdown h1. Both can
     be absent, in which case the heading is empty and the summary stands alone.
+
+    A 320-character cap is applied as defense in depth (T9.1).
     """
-    heading = _clean(title or "") or _first_h1(markdown)
-    summary = _summarise(markdown, sentences)
+    # Apply clean_markdown before extraction (T9.1)
+    cleaned = clean_markdown(markdown)
+
+    heading = _clean(title or "") or _first_h1(cleaned)
+    summary = _summarise(cleaned, sentences)
+    # Apply cap as defense in depth
+    if len(summary) > _SUMMARY_CAP_CHARS:
+        # Cut at word boundary with ellipsis
+        cut = summary[:_SUMMARY_CAP_CHARS].rsplit(None, 1)[0]
+        summary = cut + "..."
     return Extracted(heading=heading, summary=summary)
 
 
