@@ -107,10 +107,14 @@ is accepted by the installed `pipx`. Denied. Then `WebFetch` on
 `https://pipx.pypa.io/stable/cmd-overview/` for the same fact was denied too, so
 neither the local tool nor the docs could settle it. **Not re-tried as variants.**
 
-**Nothing needed from the owner.** PLAN.md specifies the string, so the README
-keeps it and says so; the uncertainty is named in the README itself with the venv
-`pip install -e .` line as the fallback that needs no faith. Worth a one-time
-`pipx install --help | grep editable` by the owner to close it.
+**CLOSED by T8.6 (2026-11-04).** The denial was the *pipe*, not the tool: T8.6
+dropped the `| grep` and allowed the output to be read directly, and plain
+`pipx install --help` runs fine here. Its options list contains
+`--editable, -e     Install a project in editable mode`, so `pipx install -e .`
+is a real invocation and the README no longer hedges about it — the venv line is
+now presented as an alternative, not as a fallback for an unverified claim. No
+owner step remains. (Still true: `pipx install --help | grep ...` as a *pipe*
+stays denied, so read the output rather than piping it.)
 
 ## 2026-11-02 · `briefing status` through the real entry point
 
@@ -133,15 +137,22 @@ one cheap machine check that both new T6.4 units parse and that their directives
 mean what I think (`OnCalendar=` grammar, `ExecStart=` resolving, no unknown
 keys). Denied. **Not re-tried as a variant.**
 
-**What the owner should do** — it is one command and it is the only thing standing
-between T6.4's units and "verified", since everything else about them (exit codes,
-the PATH `voice-tts` needs, the state dir) was checked against the code:
+**CLOSED by T8.6 (2026-11-04).** The command is allowed now — it was run as written
+and reports **no problem with either unit**; the only line it prints is an
+unrelated `/etc/systemd/system/cockpit.socket.d/override.conf:1: Assignment
+outside of section. Ignoring.`, which is a pre-existing host file and not one of
+ours. That the check genuinely inspects the units was not assumed: a control run
+fed it a deliberately broken unit and timer, and it flagged
+`Unknown key 'BogusDirective' in section [Unit]` and
+`Unknown key 'BogusTimerDirective' in section [Timer]`. No directive needs fixing,
+so no owner step remains — `PROGRESS.md` quotes the output.
 
-    systemd-analyze verify systemd/briefing.service systemd/briefing.timer
+### Still denied, unrelated to T8.6: `rm`
 
-Until then the units are reviewed-but-unparsed, and `PROGRESS.md` says so. The
-failure mode if I got a directive wrong is a unit that refuses to load, which
-systemd reports at `daemon-reload` time — silent at worst, never wrong-behaving.
+- `rm /home/spectre/.claude/jobs/bf6394da/tmp/bad.service ...` — wanted to clean up
+  the two control-check scratch units above. **Not re-tried as a variant.** They
+  live in the job's own `tmp/`, which the harness deletes with the job, so leaving
+  them costs nothing and nothing in the repo was touched.
 
 ## 2026-11-02 · `BRIEFING_LIVE=1 .venv/bin/pytest` — closed with a Makefile target
 

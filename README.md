@@ -35,9 +35,10 @@ Editable, so `src/` edits take effect without reinstalling. To install without
 python -m venv .venv && .venv/bin/pip install -e .
 ```
 
-`pipx` is declared in PLAN.md T6.3 and its `-e` support could not be verified in
-this sandbox (both `pipx --help` and the pipx docs were blocked), so the venv line
-above is the fallback that needs no faith.
+`--editable` (`-e`) is a real `pipx install` flag — verified on 2026-11-04 from
+`pipx install --help` ("Install a project in editable mode") — so either line
+above gives an editable install and edits to `src/briefing/` take effect with no
+reinstall.
 
 ## Start the local Firecrawl
 

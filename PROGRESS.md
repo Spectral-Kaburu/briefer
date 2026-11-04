@@ -905,9 +905,12 @@ Two findings worth recording. The first cut referenced `docs/AETHER_INTEGRATION.
 and `systemd/` as if present — both are T6.4 and unchecked, so the README shipped
 two dead links; they are now marked pending with the task named, and briefing mode
 is noted as needing no Aether dependency (see D20). Second, PLAN.md T6.3 names
-`pipx install -e .` verbatim, but `pipx --help` and the pipx docs were both denied
-here, so that flag is asserted rather than verified — the README says so and the
-venv line sits beside it as the fallback (DENIED.md).
+`pipx install -e .` verbatim, which was asserted rather than verified because
+`pipx --help` and the pipx docs were both denied here. **Verified 2026-11-04
+(T8.6):** `pipx install --help` lists `--editable, -e  Install a project in
+editable mode`, so the flag is real and the README now says so instead of
+hedging; the venv line stays as the alternative, not as a fallback for a claim
+that now holds.
 
 The verifier ran a byte-identity check on the embedded sample that PLAN.md does not
 ask for and reported FAIL on trailing whitespace alone: all 11 lines match
@@ -931,10 +934,16 @@ the only manual run that suppresses a scheduled briefing is one between 03:00 an
 unwritable persistence stamp, and has been dropped rather than replaced with
 another unverified claim.
 
-`systemd-analyze verify` is denied here, so both units are reviewed-but-unparsed:
-directives were checked against the code they run (exit 0 on refusal, exit 1 on
-failure, PATH for `voice-tts`, the state dir), not against systemd itself. One
-command from the owner closes it — see DENIED.md.
+**Verified 2026-11-04 (T8.6):** `systemd-analyze verify systemd/briefing.service
+systemd/briefing.timer` runs here now, and reports **no problem with either
+unit**. The only line it prints is an unrelated
+`/etc/systemd/system/cockpit.socket.d/override.conf:1: Assignment outside of
+section. Ignoring.` — a pre-existing host file, not one of ours. That the command
+really parses these units is not assumed: a control check fed it a deliberately
+broken unit and timer, and it flagged `Unknown key 'BogusDirective' in section
+[Unit]` and `Unknown key 'BogusTimerDirective' in section [Timer]` respectively,
+so a real defect would have been reported. No directive needs fixing; this closes
+the earlier "reviewed-but-unparsed" gap and no owner step remains.
 
 **T4.1** — `--llm` and `--synth` now do something. `ResearchSynth` (abstractive
 per-page summary + one overall answer with numbered sources) shares a new
@@ -1501,6 +1510,38 @@ lever is the query wording or a host filter, not `region`.
 Verified with the `verifier` subagent, which independently re-read the installed
 ddgs source and confirmed all eight `file:line` citations before agreeing with
 the null-result reading of the *Accept* line.
+
+---
+
+## T8.6 — 2026-11-04 · both blocked claims verify; nothing needed fixing
+
+Both commands from the 2026-11-02 denials run under the new allow rules. **No
+directive or doc needed a correction**, which is the useful outcome: T6.3's
+`pipx install -e .` and T6.4's units were right all along, and only the claims
+about them were stale.
+
+**`systemd-analyze verify systemd/briefing.service systemd/briefing.timer`** —
+reports nothing about either unit. The only line printed is
+`/etc/systemd/system/cockpit.socket.d/override.conf:1: Assignment outside of
+section. Ignoring.`, a pre-existing host file, not one of ours. I did not take
+that silence as proof the check worked: a control run fed it a deliberately
+broken unit and timer and it reported `Unknown key 'BogusDirective' in section
+[Unit]` and `Unknown key 'BogusTimerDirective' in section [Timer]`, so a real
+defect would have shown up as a line naming our file.
+
+**`pipx install --help`** (no pipe — T8.6's instruction, and the original denial
+was the `| grep`, not the tool) lists `--editable, -e     Install a project in
+editable mode`. So the flag is real and README's hedge — "could not be verified
+in this sandbox… so the venv line above is the fallback that needs no faith" —
+was overwritten with the fact; the venv line stays as an alternative, not a
+fallback. Also confirmed `.venv` really is editable (`__editable__.briefing-0.1.0.pth`
+points at the repo's `src/`), so the T6.4 comment claiming edits take effect with
+no redeploy is accurate.
+
+`make check` → 602 passed, 6 skipped, unchanged — this task touches no source.
+One incidental denial is logged in `DENIED.md`: `rm` on the two control-check
+scratch units, which I did not retry; they sit in the job's own `tmp/`, which the
+harness deletes with the job.
 
 
 
