@@ -1848,6 +1848,28 @@ Phase 9's premise is T8.7's finding that the output is a page dump, not an
 answer — 3 of 5 live results were a US recall unrelated to the query. Its first
 task is a catalogue of the defects, not new features.
 
+### Stopped here, on the owner's instruction (2026-11-04)
+
+The owner called the stop mid-session and asked for `STOP_OK`, so it is created
+empty at the repo root. Being precise about what that means: this is **not** the
+"every remaining task is blocked" condition `CLAUDE.md` describes. What is
+actually left is:
+
+- **T7.1** and **T7.2**, both `(optional)` and neither blocked — T7.1 is the
+  project skill, which only needed a missing `skill-creator` skill to be written
+  by hand instead (a one-file markdown job, now ticked instead of skipped).
+- **Phase 9, T9.0 to T9.9 — ten unchecked, non-optional tasks.** This is the
+  real remaining work: `PLAN.md` already carries the owner's defect catalogue
+  (D1–D9) from the first real run, T9.0 writes synthetic reproductions for it,
+  and T9.1–T9.3 fix them. T9.4 onward needs a Gemini key, which is explicitly
+  never available to this build. Phase 9's own rules were added to `CLAUDE.md`
+  on 2026-11-03, so the instruction "work until no unchecked non-optional
+  tasks" is not yet satisfied.
+
+So the stopping point is a judgement call by the owner on a working, reviewed,
+tested build — not a finished one. Nothing is blocked and nothing is broken;
+`make check` is green and `make live` passes against the live services.
+
 
 
 
