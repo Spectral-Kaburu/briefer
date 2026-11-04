@@ -164,7 +164,7 @@ Verified by inspecting the installed package source:
 | `DDGS().news(query, **kwargs)` | returns `list[dict[str, Any]]` |
 | kwargs forwarded | `region: str = "us-en"`, `safesearch`, `timelimit: str \| None = None`, `max_results: int \| None = 10`, `page: int = 1`, `backend: str = "auto"` |
 | `timelimit` values | `"d"`, `"w"`, `"m"`, `"y"` (or a custom date range) |
-| `region` | passthrough to the engine; **not validated by ddgs** (examples given: `us-en`, `uk-en`, `ru-ru`). `ke-en` is therefore *plausible* but unverified |
+| `region` | passthrough to the engine; **not validated by ddgs** (examples given: `us-en`, `uk-en`, `ru-ru`). See the T8.4 table below — no code is validated, so all are *accepted* and none is *verified to work* |
 | Exceptions | `ddgs.exceptions.DDGSException` (base), `RatelimitException` (rate limit exceeded), `TimeoutException` |
 | Result dict keys | text results carry `title`, `url`, `body`/`description`, `date`; **normalize defensively, do not assume all keys are present** |
 
@@ -181,6 +181,56 @@ So: `text()` results have **no age**, and `news()` results have one. The normali
 `SearchResult.age` is therefore empty for `text()` hits unless the caller supplies
 it. Confirmed by reading `engines/duckduckgo.py:21` and
 `engines/duckduckgo_news.py:23-24` in the installed package.
+
+### T8.4 — `region`: what ddgs does with it, and what it does not do (2026-11-04)
+
+Read from the installed source: `.venv/lib/python3.14/site-packages/ddgs/`.
+
+| Item | Verified fact |
+|---|---|
+| There is no region whitelist | every line in the package containing `region` is a signature default, a docstring example, or a handoff. **No `if region not in`, no `raise`** — so *no region code is validated anywhere*, and the answer to "which codes does ddgs actually handle" is "all of them, the list is open" |
+| `ddgs.py:141` | `region: str = "us-en"` — the library's own default |
+| `ddgs.py:155` | docstring names examples: `us-en`, `uk-en`, `ru-ru`, "etc." |
+| `base.py:56`, `base.py:106` | `region` is threaded through the base call chain, still defaulting to `us-en` |
+| `engines/duckduckgo.py:33` | text mode puts it through verbatim: `payload = {"q": query, "b": "", "l": region}` |
+| `engines/duckduckgo_news.py:48` | news mode likewise: `"l": region` |
+| `engines/brave.py:38` | the split engines *parse* it: `country, _lang = region.lower().split("-")` — so a code with no `-` raises `ValueError` on those backends |
+| `engines/google.py:62` | same shape: `country, lang = region.split("-")` |
+
+**Consequence:** a bad region is never a client-side error. It reaches DuckDuckGo
+as `l=<whatever>`, so a typo changes the market (or, more likely, changes nothing)
+with no exception and no log line. That is why the shipped example says "ddgs does
+not validate it" rather than listing valid values.
+
+#### The probe — `scripts/probe_region.py`, `make probe-region`
+
+News mode, query `"latest breaking news in kenya"`, `max_results=10`, one run per
+region, run several times on 2026-11-04. "Kenyan" = host ends `.ke`, or is
+`nation.africa`, `citizen.digital`, `kenyans.co.ke`.
+
+| Region | Rounds that returned | Kenyan hits | Hosts returned |
+|---|---|---|---|
+| `ke-en` | most | **0** | the same five US hosts |
+| `wt-wt` | most | **0** | the same five US hosts |
+| `us-en` | all | **0** | the same five US hosts |
+
+The five hosts, whenever a region returned at all: `21alivenews.com`,
+`broadwayworld.com`, `missoulian.com`, `sports.yahoo.com`, `yahoo.com`.
+No `.ke` host ever appeared.
+
+| Item | Finding |
+|---|---|
+| Kenyan hits | **0 in every region, in every round that returned** |
+| Host sets | **identical across all three regions** — the region parameter does not change which outlets appear for this query |
+| `DDGSException("No results found.")` | random per request, **not per region**. In one round `ke-en` + `wt-wt` both failed while `us-en` returned 10; in another `us-en` failed while the other two returned 10 |
+| Text mode | same outcome: 0 Kenyan hosts, only the *count* varied (10 vs 7) |
+
+**Conclusion — no region serves Kenyan news better for this query.** The market
+hint `region` compiles to is inert on DDG's news endpoint here: three different
+codes produced byte-identical host sets, and none produced a `.ke` host. The
+country of the results is decided by the *query*, not by the region. A Kenya
+search returning `sports.yahoo.com` / `missoulian.com` / `broadwayworld.com` is
+US syndication of Kenyan stories, and no region code stops that.
 
 ## 5. Rich + Typer (for T3.2/T3.3)
 

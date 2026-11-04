@@ -11,8 +11,10 @@ news_topics: ["technology", "world news", "Breaking news", "Formula 1 news"]
 search:
   # How many results to aim for per query.
   results: 10
-  # DDG region code. Passed straight through to ddgs; ddgs does not validate it.
-  # Common: us-en, uk-en, ru-ru. Change this if your results are off-region.
+  # DDG region code. Passed straight through to ddgs; ddgs does not validate it
+  # (NOTES-APIS section 4), so a typo is silent. Common: us-en, uk-en, ru-ru.
+  # Change this if your results are off-region — but note the T8.4 probe found
+  # region made no measurable difference to which country's outlets come back.
   region: us-en
   # Words like "latest/breaking/today/news" switch DDG to news search.
   auto_news_detect: true

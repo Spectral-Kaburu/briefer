@@ -1,4 +1,4 @@
-.PHONY: check test fmt live
+.PHONY: check test fmt live probe-region
 
 check:
 	.venv/bin/ruff check .
@@ -19,3 +19,9 @@ fmt:
 # and live ddgs when they are marked and gated, which these are.
 live:
 	BRIEFING_LIVE=1 .venv/bin/pytest -m live
+
+# The evidence behind `search.region`'s default (T8.4). Hits the real ddgs three
+# times, once per candidate region, so it is deliberately not a dependency of
+# `check` or `test`. Output is a table; nothing is written.
+probe-region:
+	.venv/bin/python scripts/probe_region.py

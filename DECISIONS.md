@@ -451,3 +451,43 @@ than `_SPEAKER`, because patching the factory replaces the code under test — t
 first version of the wiring test did exactly that and passed under a sabotage that
 swapped the two names back. A factory needs its *product* faked.
 
+## D27 — 2026-11-04 · `search.region` stays `us-en`, because the probe found no region better (T8.4)
+
+SPEC §6 ships `region: ke-en` with its own "verify region code accepted by ddgs"
+comment, and §12 asks it as an open question. T8.4 answers it with a probe
+(`scripts/probe_region.py`, `make probe-region`) rather than a guess: news mode,
+`"latest breaking news in kenya"`, `max_results=10`, one run per region.
+
+**Decision**: the default stays **`us-en`**, the value already shipped at
+`config.py:38` and the one ddgs itself defaults to (`ddgs.py:141`).
+
+**Reason**: three candidates, zero measured difference. `ke-en`, `wt-wt` and
+`us-en` each returned the *same five US hosts* — `21alivenews.com`,
+`broadwayworld.com`, `missoulian.com`, `sports.yahoo.com`, `yahoo.com` — and
+**not one `.ke` host, in any region, in any round**. The `DDGSException("No
+results found.")` failures were random per request, not per region (once
+`ke-en`+`wt-wt` failed while `us-en` returned 10; once the reverse). So there is
+no evidence that would justify changing a value to another value. Changing it to
+`ke-en` because the briefing is Kenyan would be a change with no measured effect
+— and it would name a code that the probe just showed does not deliver Kenyan
+results. `us-en` has one further tie-breaker: it is the library's own default, so
+the config file is not silently overriding ddgs with a value nothing backs up.
+
+**What this does NOT claim**: `us-en` is not *verified good*, it is *no worse
+than the alternatives* on this query. The ddgs `region` reaches DDG as the `l`
+market hint verbatim (`engines/duckduckgo_news.py:48`) and is not validated
+(`NOTES-APIS` §4), so no region code can be proven correct from ddgs's source
+alone — the only evidence is what comes back.
+
+**Cost, recorded rather than hidden**: a Kenya query still returns US
+syndication of Kenyan stories. That is a real weakness of the default, and the
+honest fix is not `region` (which the probe shows is inert for this query) but
+the query wording or a host-side filter — a change of behaviour, and out of
+T8.4's scope. Plan it as its own task rather than folding it into a config
+default, and until then `ke-en` etc. remain one-line owner-editable changes
+because the field is a passthrough.
+
+**Owner step (SPEC §12's open question, answered):** none required. The default
+is unchanged from what already shipped, and the example config's comment now
+says why changing `region` may not help.
+
