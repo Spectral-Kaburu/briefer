@@ -108,6 +108,56 @@ everything local, nothing spent:
   5 found · 2 extracted (2 local) · 6.4s
 ```
 
+### Ask mode
+
+```bash
+briefing -a "question"   # shorthand
+briefing ask "question"  # the same thing
+```
+
+Ask mode searches the web, extracts pages, and generates a concise answer with
+**numbered sources** — unlike research mode which shows all results, ask mode
+produces an answer you can cite.
+
+| Flag | Effect |
+|---|---|
+| `--pages N` | Maximum pages to fetch and include in the answer |
+| `--time day\|week\|month\|any` | Recency window for the search |
+| `--news` / `--web` | Force the search mode |
+| `--no-api` | Never call the Firecrawl API |
+| `--json` | Emit the answer as JSON (for scripts and Aether) |
+| `--plain` | Plain text, no ANSI colors |
+
+Without a Gemini API key (set `GEMINI_API_KEY`), ask mode returns **passages only**
+from the fetched pages with a warning — never a made-up answer. Sample output:
+
+```
+╭───────────────────────────────────────────── Answer ─────────────────────────────────────────────╮
+│ Python 3.12 is the latest stable release, with Python 3.13 in development.                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+[1] Python 3.12 Released  [LOCAL]
+[2] Python Release Schedule  [LOCAL]
+                                                                                                  
+  2 local · 2 sources (LLM) · search: 0.45s · fetch: 1.23s · model: 0.89s
+```
+
+The `--json` output is:
+
+```json
+{
+  "question": "What is the current Python version?",
+  "answer": "Python 3.12 is the latest stable release...",
+  "used_llm": true,
+  "sources": [
+    {"number": 1, "title": "Python 3.12 Released", "url": "https://...", "domain": "python.org", "method": "LOCAL", "text": "..."},
+    ...
+  ],
+  "timings": {"search": 0.45, "fetch": 1.23, "model": 0.89},
+  "warnings": []
+}
+```
+
 ### Briefing mode
 
 ```bash
@@ -186,6 +236,7 @@ firecrawl:
   local: {base_url: http://localhost:3002, timeout_s: 30, concurrency: 5}
   api:   {base_url: https://api.firecrawl.dev, key_env: FIRECRAWL_API_KEY,
           daily_limit: 20, timeout_s: 30}
+ask:     {results: 6, pages: 3, deadline_s: 10.0}
 whitelist: {auto_add: true, path: whitelist.yaml, prefer_api_for_whitelisted: false}
 summary:   {mode: extractive, sentences: 2}
 blocklist_topics: [crypto, bitcoin, trading, forex, stocks]
