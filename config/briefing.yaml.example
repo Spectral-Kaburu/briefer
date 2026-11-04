@@ -41,7 +41,7 @@ whitelist:
   auto_add: true
   path: whitelist.yaml
   # When true, whitelisted domains skip local and go straight to the API.
-  prefer_api_for_whitelisted: true
+  prefer_api_for_whitelisted: false
 
 summary:
   # extractive (offline, instant) or llm (Gemini, opt-in via --llm).

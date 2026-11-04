@@ -43,7 +43,7 @@ from briefing.log import get_logger
 from briefing.pipeline import Pipeline, Report
 from briefing.search import Searcher, SearchResult
 from briefing.synth import Gemini, ResearchSynth, Speaker
-from briefing.ui import UI, answer, badge
+from briefing.ui import UI, answer, card
 from briefing.whitelist import Whitelist, WhitelistEntry, normalize_host
 
 
@@ -251,18 +251,18 @@ def _ask(
 
 
 def _render_answer(answer: Answer, *, plain: bool | None = None) -> None:
-    """Render an Answer as a panel with numbered sources and a footer.
+    """Render an Answer as an answer panel followed by source cards (like research).
 
     The output is:
     1. Answer panel (the text field, possibly from model or passages)
-    2. Numbered source list (domain, title, URL, method badge)
+    2. Source cards (domain, title, URL, method badge) - only sources with text
     3. Footer with timings and warnings
     """
     from rich import box
     from rich.panel import Panel
     from rich.text import Text
 
-    console = Console(stderr=(plain is True), width=100) if plain else Console(width=100)
+    console = Console(stderr=(plain is True), width=80) if plain else Console(width=80)
     if plain:
         console.no_color = True
 
@@ -271,34 +271,42 @@ def _render_answer(answer: Answer, *, plain: bool | None = None) -> None:
         Text(answer.text),
         title="Answer",
         box=box.SIMPLE if plain else box.ROUNDED,
-        expand=True,
+        expand=False,
     )
     console.print(answer_panel)
 
-    # 2. Numbered source list (matching research card style)
-    if answer.sources:
-        console.print()
-        for num, title, url, domain, method, text in answer.sources:
-            # Build method badge - match research card style
-            # method is a string ("LOCAL", "API", "SNIPPET") from Answer.sources
-            badge_text = badge(Method[method], plain=plain)
+    # 2. Source cards - using the same UI as research mode
+    # Filter out sources with no preview text (links with no previews are irrelevant)
+    sources_with_text = [
+        (num, title, url, domain, method, text)
+        for num, title, url, domain, method, text in answer.sources
+        if text  # Exclude sources with empty text
+    ]
 
-            line = Text()
-            line.append(f"{num}  ", "bold")
-            line.append(title or "(no title)", "bold")
-            line.append("  ")
-            line.append(badge_text)
-            meta = Text()
-            meta.append(domain, "dim")
-            console.print(line)
-            console.print(meta)
-            if url:
-                console.print(f"    {url}", "blue")
+    if sources_with_text:
+        console.print()
+        for rank, (num, title, url, domain, method, text) in enumerate(sources_with_text, start=1):
+            # Build a Result-like object for the card renderer
+            result = _AnswerResult(
+                rank=rank,
+                title=title,
+                url=url or "",
+                domain=domain,
+                method=Method[method],
+                heading=title,
+                summary=text,
+                ok=True,
+                age="",
+                snippet=text,
+                source="",
+                warning=None,
+            )
+            console.print(card(result, plain=plain))
 
     # 3. Footer with timings and warnings
     footer_parts = []
 
-    # Source counts by method
+    # Source counts by method (count all sources, including those without text)
     local_count = sum(1 for s in answer.sources if s[4] == "LOCAL")
     api_count = sum(1 for s in answer.sources if s[4] == "API")
     snippet_count = sum(1 for s in answer.sources if s[4] == "SNIPPET")
@@ -337,9 +345,45 @@ def _render_answer(answer: Answer, *, plain: bool | None = None) -> None:
         footer_panel = Panel(
             Text(" · ".join(footer_parts), "dim"),
             box=box.SIMPLE,
-            expand=True,
+            expand=False,
         )
         console.print(footer_panel)
+
+
+class _AnswerResult:
+    """Adapter that makes Answer sources compatible with the card() UI.
+
+    This is a simple dataclass that mimics the Result structure expected by ui.card(),
+    allowing us to reuse the research card rendering code for ask mode.
+    """
+
+    def __init__(
+        self,
+        rank: int,
+        title: str,
+        url: str,
+        domain: str,
+        method: Method,
+        heading: str,
+        summary: str,
+        ok: bool,
+        age: str,
+        snippet: str,
+        source: str,
+        warning: str | None,
+    ) -> None:
+        self.rank = rank
+        self.title = title
+        self.url = url
+        self.domain = domain
+        self.method = method
+        self.heading = heading
+        self.summary = summary
+        self.ok = ok
+        self.age = age
+        self.snippet = snippet
+        self.source = source
+        self.warning = warning or ""
 
 
 def _answer_as_json(answer: Answer) -> dict[str, t.Any]:
