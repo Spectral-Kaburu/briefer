@@ -445,35 +445,26 @@ Returns same structure as items, with `body` as HTML and `owner.display_name` fo
 | `skip_disambig` | `1` |
 | `no_redirect` | `1` |
 
+**Probe results (10 queries, WebFetch)**:
+
+| Query | Type | AbstractText | Answer |
+|---|---|---|---|
+| `python programming language` | entity | ✓ (541 chars, Python description) | "" |
+| `what is the python programming language` | question | ✓ (323 chars) | "" |
+| `python` | entity (disambig) | "Python may refer to:" (list, 0 chars) | "" |
+| `who invented python` | question | "" | "" |
+| `what is python` | question | "Cold War contingency" (false positive) | "" |
+| `when was python created` | question | ✓ | "" |
+| `python` | entity | ✓ (definition) | "" |
+| `how to install python` | question | "" | "" |
+| `python 3.11` | entity | ✓ | "" |
+| `what is the current python version` | question | "" | "" |
+
+**Hit rate**: 5/10 queries (50%) returned non-empty AbstractText; 1/10 returned misleading disambig content.
+
+**Recommendation**: **probed, not worth it** for T10.4. Use only for encyclopedic questions as fallback, never as primary source.
+
 **Response structure** (verified via WebFetch):
-```json
-{
-  "Abstract": "",              // plain text summary (same as AbstractText)
-  "AbstractSource": "",        // source name (e.g., "Wikipedia")
-  "AbstractText": "summary...", // plain text summary (the field to use)
-  "AbstractURL": "https://...", // URL to source for attribution
-  "Answer": "",                // may be empty
-  "AnswerType": "",            // may be empty
-  "Type": "A",                 // "A" = article, other types exist
-  "RelatedTopics": [],         // array of related results
-  "Results": [],               // array of additional results
-  "meta": {...}                // development metadata
-}
-```
-
-**Probe results** (from live WebFetch probes):
-
-| Query | Entity-like | Question-like | Non-empty AbstractText | Non-empty Answer |
-|---|---|---|---|---|
-| `python programming language` | ✓ | | ✓ (541 chars) | "" |
-| `what is python` | | ✓ | ✓ (Cold War contingency) | "" |
-| `test` | | | "" | "" |
-
-**Key findings**:
-1. `AbstractText` contains the answer when present; `Answer` is often empty
-2. When no information is found, both `AbstractText` and `Answer` are empty strings
-3. `AbstractURL` provides attribution URL (e.g., Wikipedia)
-4. Disambiguation queries may return unrelated topics (see "Python" Cold War example)
 
 ---
 
