@@ -442,3 +442,53 @@ class TestStackExchangeAdapter:
 
             result = _async_adapter_lookup(adapter_with_key, "test")
             assert result == []  # Empty items returns empty
+
+    def test_control_characters_stripped_from_answer(
+        self, adapter_with_key: StackExchangeAdapter
+    ) -> None:
+        """Control characters and ANSI escapes should be stripped from answer text."""
+        with respx.mock:
+            respx.get("https://api.stackexchange.com/2.3/search/advanced").mock(
+                return_value=Response(
+                    200,
+                    json={
+                        "items": [
+                            {
+                                "title": "Test question",
+                                "body": "<p>Question body</p>",
+                                "accepted_answer_id": 12345,
+                                "link": "https://stackoverflow.com/questions/1/1",
+                            }
+                        ],
+                        "quota_remaining": 9999,
+                    },
+                )
+            )
+            # Answer contains ANSI escape and control chars
+            ansi_escape = "\x1b[32m\x1b[0m"  # Green color codes
+            control_chars = "\x00\x01\x02\x08\x1f"  # NUL, SOH, STX, BS, US
+            respx.get("https://api.stackexchange.com/2.3/answers/12345").mock(
+                return_value=Response(
+                    200,
+                    json={
+                        "items": [
+                            {
+                                "answer_id": 12345,
+                                "body": f"<p>Answer with{ansi_escape}control{control_chars}chars</p>",
+                                "owner": {"display_name": "User"},
+                            }
+                        ],
+                    },
+                )
+            )
+
+            result = _async_adapter_lookup(adapter_with_key, "test")
+            assert len(result) == 1
+            # Control chars should be stripped
+            assert ansi_escape not in result[0].text
+            assert "\x00" not in result[0].text
+            assert "\x08" not in result[0].text
+            # Normal text should remain
+            assert "Answer" in result[0].text
+            assert "control" in result[0].text
+            assert "chars" in result[0].text

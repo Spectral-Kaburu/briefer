@@ -454,3 +454,43 @@ class TestWikipediaAdapter:
 
             result = _async_adapter_lookup(adapter, "test")
             assert result == []
+
+    def test_control_characters_stripped_from_extract(self, adapter: WikipediaAdapter) -> None:
+        """Control characters and ANSI escapes should be stripped from extract."""
+        with respx.mock:
+            respx.get("https://en.wikipedia.org/w/api.php").mock(
+                return_value=Response(
+                    200,
+                    json=[
+                        "test",
+                        ["Test"],
+                        [""],
+                        ["https://en.wikipedia.org/wiki/Test"],
+                    ],
+                )
+            )
+            # Extract contains ANSI escape and control chars
+            ansi_escape = "\x1b[31m\x1b[0m"  # Red color codes
+            control_chars = "\x00\x01\x02\x08\x1f"  # NUL, SOH, STX, BS, US
+            respx.get("https://en.wikipedia.org/api/rest_v1/page/summary/Test").mock(
+                return_value=Response(
+                    200,
+                    json={
+                        "type": "standard",
+                        "title": "Test",
+                        "extract": f"Some{ansi_escape}content{control_chars}here",
+                        "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Test"}},
+                    },
+                )
+            )
+
+            result = _async_adapter_lookup(adapter, "test")
+            assert len(result) == 1
+            # Control chars should be stripped
+            assert ansi_escape not in result[0].text
+            assert "\x00" not in result[0].text
+            assert "\x08" not in result[0].text
+            # Normal text should remain
+            assert "Some" in result[0].text
+            assert "content" in result[0].text
+            assert "here" in result[0].text

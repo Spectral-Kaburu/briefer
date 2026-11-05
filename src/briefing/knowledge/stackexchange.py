@@ -11,7 +11,7 @@ import re
 import httpx
 
 from briefing.config import KnowledgeConfig
-from briefing.knowledge.base import KnowledgeSource, Passage
+from briefing.knowledge.base import KnowledgeSource, Passage, strip_control_chars
 
 logger = logging.getLogger(__name__)
 
@@ -206,7 +206,7 @@ class StackExchangeAdapter(KnowledgeSource):
         author = answer.get("owner", {}).get("display_name", "")
 
         return Passage(
-            text=answer_text,
+            text=strip_control_chars(answer_text),
             title=title,
             url=question.get("link", ""),
             domain="stackoverflow.com",

@@ -7,7 +7,7 @@ Never raises; returns empty list on any failure.
 import httpx
 
 from briefing.config import KnowledgeConfig
-from briefing.knowledge.base import KnowledgeSource, Passage
+from briefing.knowledge.base import KnowledgeSource, Passage, strip_control_chars
 
 
 class WikipediaAdapter(KnowledgeSource):
@@ -140,7 +140,7 @@ class WikipediaAdapter(KnowledgeSource):
                 canonical_url = url
 
             return Passage(
-                text=extract,
+                text=strip_control_chars(extract),
                 title=page_title,
                 url=canonical_url,
                 domain="wikipedia.org",
