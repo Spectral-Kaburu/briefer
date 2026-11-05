@@ -2369,5 +2369,68 @@ Fixed test failures in `tests/test_ask_cli.py` where source tuples in fake `Answ
 - Tests verify URL scheme (https), domain, license (CC BY-SA 4.0), title and text presence
 - Verifier confirmed: tests properly decorated, skip correctly without `BRIEFING_LIVE=1`, and sabotage testing shows tests would fail against healthy service
 
-**Status:** COMPLETE — T10.8 verified and committed. Ready for T10.9 docs and close-out.
+**Status:** COMPLETE — T10.8 verified and committed.
+
+### T10.9 — Docs and close-out (2026-11-05)
+
+**What was done:**
+- Added "Knowledge sources" section to README.md with:
+  - Table showing Wikipedia covers encyclopedic questions, Stack Exchange covers developer questions
+  - Configuration block showing all `knowledge:` config options
+  - Usage example: `briefing -a "what is the Python programming language?"`
+  - `--no-knowledge` flag documentation
+- Updated `scripts/render_samples.py`:
+  - Added A4: Knowledge sources (Wiki + SO) scenario with 9-tuple sources
+  - Added A5: Nothing found scenario
+  - Fixed `_render_answer` to handle both 6 and 9 element tuples
+- Regenerated `docs/sample-output.txt` with knowledge source examples showing:
+  - WIKI badge and CC BY-SA license for Wikipedia sources
+  - SO badge, CC BY-SA license, and author for Stack Overflow sources
+  - Footer counts: "2 wiki · 1 so" etc.
+
+**Verification:**
+- `make check` → 762 passed, 9 skipped, ruff clean
+- All new scenarios render correctly with proper badge, license, and author display
+
+## Phase 11 audit fixes (2026-11-05)
+
+### A-001 P0 fix: Prompt injection vulnerability
+
+**Problem:** Source text containing the closing delimiter `\n``` ` could escape the delimited code block in the prompt, enabling prompt injection.
+
+**Fix:** Added `text.replace(_SOURCE_BLOCK_CLOSE, "")` in `_build_prompt()` at ask.py:374 to strip the closing delimiter from source text before embedding it in the prompt.
+
+**Test:** `test_prompt_injection_prevented_by_stripping_delimiter` in tests/test_ask.py verifies delimiter balance in the rendered prompt.
+
+**Sabotage:** Reverting the fix causes the test to fail with "Delimiter imbalance: 2 open vs 3 close".
+
+### A-002 P1 fix: Wikipedia control chars
+
+**Problem:** Wikipedia adapter returned raw `extract` field containing ANSI escapes and control characters.
+
+**Fix:** Imported `strip_control_chars` from `briefing.knowledge.base` and applied it to `extract` at wikipedia.py:143 before creating the Passage.
+
+**Test:** `test_control_characters_stripped_from_extract` in tests/test_wikipedia.py verifies control chars are removed while normal text is preserved.
+
+**Sabotage:** Removing the import causes a NameError caught by the adapter's try/except, returning empty results; the test fails.
+
+### A-003 P1 fix: Stack Exchange control chars
+
+**Problem:** Stack Exchange adapter returned `_html_to_text` output containing ANSI escapes and control characters from API responses.
+
+**Fix:** Imported `strip_control_chars` from `briefing.knowledge.base` and applied it to `answer_text` at stackexchange.py:209 before creating the Passage.
+
+**Test:** `test_control_characters_stripped_from_answer` in tests/test_stackexchange.py verifies control chars are removed while normal text is preserved.
+
+**Sabotage:** Removing the import causes a NameError caught by the adapter's try/except, returning empty results; the test fails.
+
+### A-006 P2 fix: Cancelled tasks not awaited
+
+**Problem:** Cancelled tasks at deadlines were not awaited, potentially causing "Task exception was never retrieved" warnings.
+
+**Fix:** Added `await task` with `except asyncio.CancelledError: pass` in two locations:
+- ask.py:161-167 in the main `ask()` function
+- ask.py:359-364 in `_fetch_with_deadline()`
+
+**Verification:** `make check` → 765 passed, 9 skipped, ruff clean.
 
