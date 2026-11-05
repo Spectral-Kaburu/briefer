@@ -79,7 +79,7 @@ class EvidenceSource:
             self.title,
             self.url,
             self.domain,
-            self.method.value if isinstance(self.method, Method) else self.method,
+            self.method.name if isinstance(self.method, Method) else self.method,
             self.text,
             self.license,
             self.author,
