@@ -157,9 +157,14 @@ async def ask(
             return_when=asyncio.ALL_COMPLETED,
         )
 
-        # Cancel anything still pending after deadline
+        # Cancel anything still pending after deadline and await them
+        # to avoid "Task exception was never retrieved" warnings
         for task in pending:
             task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass  # Expected for cancelled tasks
 
         # Collect knowledge passages from completed adapter tasks
         for task in adapter_lookup_tasks:
@@ -350,9 +355,13 @@ async def _fetch_with_deadline(
             except Exception:  # noqa: BLE001, S110
                 pass  # Skip failed fetches
 
-    # Cancel remaining tasks
+    # Cancel remaining tasks and await them to avoid warnings
     for task in pending:
         task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass  # Expected for cancelled tasks
 
     # Sort by number to maintain order
     results_data.sort(key=lambda s: s.number)
@@ -370,7 +379,8 @@ def _build_prompt(
     source_blocks: list[str] = []
     for s in sources:
         # Put source text inside delimited block, stripping closing delimiter from text
-        text = s.text
+        # to prevent prompt injection via malicious content
+        text = s.text.replace(_SOURCE_BLOCK_CLOSE, "")
         source_blocks.append(
             f"[{s.number}] {s.title}\n"
             f"Domain: {s.domain}\n"
