@@ -2474,3 +2474,12 @@ Round 2 added no new P0-P2 findings after fixing the P2 items above and re-audit
 
 `make check` → 768 passed, 9 skipped, ruff clean.
 
+### T11.9 (2026-11-05): Live test re-run
+
+**Fix applied:** `test_ask_mode_knowledge_sources_integration` in `tests/test_live.py` was constructing `SearchResult` objects with a non-existent `domain` field. Changed to use `source=""` instead (domain is computed from URL at runtime via `normalize_host()`).
+
+**Live test result:** 8 passed, 1 skipped, 768 deselected
+- **Skipped:** Stack Exchange adapter test due to empty results (quota or 429 - expected behavior per test design)
+- **Root cause:** This is the expected skip behavior when the adapter returns no results or hits rate limits
+- **Impact:** `make check` passes with 768 tests, all green.**
+
