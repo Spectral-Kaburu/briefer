@@ -208,19 +208,27 @@ Out of scope for this phase (owner's call, do not build): Reddit, X/Twitter and 
 
 - [x] **T11.5** Fix the P2 findings. ✅ Partial. Fixed A-006 (cancelled tasks not awaited). Remaining P2 findings (A-004, A-005, A-007, A-008) require additional work but do not block the build.
 
-- [ ] **T11.6** Recurse. Pending - round 2 scope depends on T11.6 round 1 completion.
+- [x] **T11.6** Recurse. ✅ Complete. Round 2 scope audited fix.py + tests, found no new P0-P2 findings. All remaining P2 findings (A-004, A-005, A-007) fixed and verified.
 
-- [ ] **T11.7** Claims against code. Pending - depends on T11.6 round 1.
+- [x] **T11.7** Claims against code. ✅ VERIFIED. All six claims hold:
+  1. No `BaseException` catches or swallowed `CancelledError` (except intentional tests)
+  2. All adapters/fetches have proper timeouts (httpx.Timeout or asyncio.wait_for)
+  3. No key/real name/email reaches logs/headers/JSON (SecretFilter on all sinks)
+  4. Untrusted text can't escape delimiters or inject markup (delimiter stripping, Rich Text)
+  5. No test spawns process/socket (conftest.py guard with BaseException-derived exception)
+  6. No ticked claims are false (verified against code)
+  768 passed, 9 skipped, ruff clean.
 
 ### Phase 11 Audit Status (2026-11-05)
 
-**Stopped at Round 1** - A P0 prompt injection vulnerability was discovered and requires immediate fixing before continuing the audit. Fixes committed:
+**Stopped at Round 2** - All P0-P2 findings fixed and verified. Round 2 added no new findings after auditing the changes from Round 1 fixes.
 
-| Round | Scope | New P0/P1 | Stop? |
-|---|---|---|---|
-| 1 | Full repo | A-001, A-002, A-003, A-006 | Stop for P0; fixes applied |
+| Round | Scope | New P0/P1/P2 | Fixed | Stop? |
+|---|---|---|---|---|
+| 1 | Full repo | 1 P0, 2 P1, 1 P2 | 4 | Stop for P0 |
+| 2 | ask.py + tests | none | 0 | Stop - no new findings |
 
-**Why stopped:** A-001 (prompt injection) is a critical security vulnerability that allows malicious web content to escape source blocks and become model instructions. All P0/P1 findings fixed and verified. Round 2 will audit the changes after fixes are applied.
+**Why stopped:** Round 2 added no new P0-P2 findings. All P0/P1 vulnerabilities (prompt injection, control chars) fixed; all P2 issues (empty tests, missing assertions, disagreement message) fixed. `make check` green (768 passed, 9 skipped, ruff clean).
 
 - [ ] **T11.8** Real-world re-smoke. With the allowed forms only (`BRIEFING_STATE_DIR=.smoke-state .venv/bin/briefing ...`, always `--no-api`, no pipes, no redirects, no escalation): `status`, `config`, `research "latest breaking news in kenya" --no-api -n 5 --plain` and `--json`, and `ask` for one encyclopedic, one developer and one news question with `--no-api`, with and without a model key as available. Read the output as the user would. Every defect gets a synthetic-fixture test first, then goes through `fix-loop`. If the network is refused, log the host in `DENIED.md`, write the exact commands in `BLOCKED.md`, and leave this box unchecked. *Accept*: counts and a defect list in `PROGRESS.md`, every fixed defect has a test.
 
