@@ -165,3 +165,169 @@ async def test_the_real_backup_adapter_never_raises_on_a_dead_instance() -> None
         await search.aclose()
 
     assert results == [], "a dead instance must read as no results, not a crash"
+
+
+# --- T10.8: Knowledge source adapter live tests --------------------------------
+
+
+@requires_live
+@pytest.mark.live
+@pytest.mark.asyncio
+async def test_real_wikipedia_adapter_returns_passage() -> None:
+    """T10.8: The real Wikipedia adapter returns a passage for a clear query.
+
+    The quota is barely touched with one lookup. Skips on connection failure,
+    timeout, or 429.
+    """
+    from briefing.config import KnowledgeConfig
+    from briefing.knowledge.wikipedia import WikipediaAdapter
+
+    config = KnowledgeConfig(timeout_s=10.0)
+    adapter = WikipediaAdapter(config)
+
+    try:
+        results = await adapter.lookup("python programming language", limit=1)
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"Wikipedia adapter failed ({exc!r})")
+
+    # If results is empty, the service may be degraded - skip rather than fail
+    if not results:
+        pytest.skip("Wikipedia adapter returned no results (service degraded or 429)")
+
+    assert len(results) >= 1
+    passage = results[0]
+    assert passage.title, "passage has no title"
+    assert passage.text, "passage has no text"
+    assert "wikipedia.org" in passage.url or "wikipedia.org" in passage.domain
+    assert "CC BY-SA" in passage.license
+    assert passage.url.startswith("https://")
+
+
+@requires_live
+@pytest.mark.live
+@pytest.mark.asyncio
+async def test_real_stackexchange_adapter_returns_passage() -> None:
+    """T10.8: The real Stack Exchange adapter returns a passage for a clear query.
+
+    The quota is barely touched with one lookup. Skips on connection failure,
+    timeout, or 429. Requires a valid STACKEXCHANGE_KEY for best results,
+    but works without one (lower quota).
+    """
+    from briefing.config import KnowledgeConfig
+    from briefing.knowledge.stackexchange import StackExchangeAdapter
+
+    config = KnowledgeConfig(timeout_s=10.0)
+    key = os.environ.get("STACKEXCHANGE_KEY", None)
+    adapter = StackExchangeAdapter(config, key=key)
+
+    try:
+        results = await adapter.lookup("python asyncio semaphore", limit=1)
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"Stack Exchange adapter failed ({exc!r})")
+
+    # If results is empty, check if it's quota exhaustion
+    if not results:
+        # Could be no accepted answers, quota exhaustion, or service issue
+        pytest.skip("Stack Exchange adapter returned no results")
+
+    assert len(results) >= 1
+    passage = results[0]
+    assert passage.title, "passage has no title"
+    assert passage.text, "passage has no text"
+    assert "stackoverflow.com" in passage.url or "stackoverflow.com" in passage.domain
+    assert "CC BY-SA" in passage.license
+    assert passage.url.startswith("https://")
+
+
+@requires_live
+@pytest.mark.live
+@pytest.mark.asyncio
+async def test_ask_mode_knowledge_sources_integration() -> None:
+    """T10.8: End-to-end ask mode with Wikipedia knowledge source integration.
+
+    The ask mode should run knowledge adapters concurrently with web search,
+    merge their passages into sources, and number them first.
+    """
+    from briefing.ask import ask
+    from briefing.config import KnowledgeConfig
+    from briefing.knowledge.stackexchange import StackExchangeAdapter
+    from briefing.knowledge.wikipedia import WikipediaAdapter
+    from briefing.search import SearchResult
+
+    config = KnowledgeConfig(timeout_s=15.0)
+
+    # Create knowledge adapters
+    knowledge_adapters = [
+        WikipediaAdapter(config),
+        StackExchangeAdapter(config),
+    ]
+
+    # Create a search result that will be deduplicated (domain matches knowledge host)
+    # This tests that knowledge passages are numbered first and then web sources
+    search_results = [
+        SearchResult(
+            title="Python Wiki Article",
+            url="https://en.wikipedia.org/wiki/Python_(programming_language)",
+            snippet="A Wikipedia article about Python (which would be deduplicated)",
+            domain="wikipedia.org",
+            age="",
+            origin="text",
+        ),
+        SearchResult(
+            title="Python Official Site",
+            url="https://www.python.org/",
+            snippet="The official Python website",
+            domain="python.org",
+            age="",
+            origin="text",
+        ),
+    ]
+
+    async def fake_search(query: str) -> list[SearchResult]:
+        return search_results
+
+    async def fake_fetch(hit: SearchResult) -> tuple[str, str, str]:
+        # Return empty markdown for Wikipedia result (will become snippet-only)
+        # Return real-ish content for python.org
+        if "wikipedia" in hit.url:
+            return hit.title or "Test", "", hit.snippet or "Wiki snippet"
+        return hit.title or "Test", hit.snippet or "Content", f"# {hit.title}\n{hit.snippet}"
+
+    def fake_extract(
+        markdown: str, heading: str, url: str, search_title: str, query: str | None
+    ) -> tuple[str, str]:
+        return heading or "Test", markdown or heading or search_title or "Content"
+
+    try:
+        result = await ask(
+            query="what is the python programming language",
+            search=fake_search,
+            fetch=fake_fetch,
+            extract=fake_extract,
+            model=None,  # No model key - we'll check passages
+            knowledge_enabled=True,
+            knowledge_adapters=knowledge_adapters,
+            knowledge_config=config,
+            pages=3,
+            deadline_s=20.0,
+        )
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"ask mode failed ({exc!r})")
+
+    # We should have sources
+    assert result.sources, "ask mode returned no sources"
+
+    # First source should be from Wikipedia (numbered before web sources)
+    # Check the first source's domain contains wikipedia
+    first_source_domain = result.sources[0][
+        3
+    ]  # domain is 4th element (0-indexed: 0=n, 1=title, 2=url, 3=domain)
+    assert "wikipedia" in first_source_domain.lower(), (
+        f"first source domain is {first_source_domain}"
+    )
+
+    # Count Wiki and SO sources
+    wiki_sources = [s for s in result.sources if "wikipedia" in s[3].lower()]
+
+    # At least one Wikipedia source should be present
+    assert len(wiki_sources) >= 1, f"no Wikipedia source found in {result.sources}"

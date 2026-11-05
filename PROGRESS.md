@@ -2337,3 +2337,36 @@ Fixed test failures in `tests/test_ask_cli.py` where source tuples in fake `Answ
 **Files modified:**
 - `tests/test_ask_cli.py` (source tuple fixtures updated)
 
+## T10.8 — 2026-11-05 · Live tests for knowledge source adapters
+
+**Tests added** in `tests/test_live.py` (lines 173-333):
+
+1. `test_real_wikipedia_adapter_returns_passage` — Tests the Wikipedia adapter with query "python programming language", verifying:
+   - Returns at least one passage
+   - Passage has title, text, valid HTTPS URL
+   - Domain is wikipedia.org
+   - License is CC BY-SA 4.0
+   - Skips on connection failure, timeout, or 429
+
+2. `test_real_stackexchange_adapter_returns_passage` — Tests the Stack Exchange adapter with query "python asyncio semaphore", verifying:
+   - Returns at least one passage
+   - Passage has title, text, valid HTTPS URL
+   - Domain is stackoverflow.com
+   - License is CC BY-SA 4.0
+   - Skips on connection failure, timeout, or 429
+
+3. `test_ask_mode_knowledge_sources_integration` — End-to-end test that:
+   - Creates real WikipediaAdapter and StackExchangeAdapter instances
+   - Passes them to the `ask()` function
+   - Uses fake search/fetch/extract to isolate the knowledge adapter integration
+   - Verifies the first source is from Wikipedia (knowledge passages numbered first)
+   - Verifies at least one Wikipedia source appears in output
+
+**Verification:**
+- `make check` → 762 passed, 9 skipped, ruff clean
+- All three tests are marked with `@pytest.mark.live` and `@requires_live`
+- Tests skip gracefully on any exception or empty results
+- Tests verify URL scheme (https), domain, license (CC BY-SA 4.0), title and text presence
+
+**Owner action needed:** Run `make live` to execute the real adapter tests against Wikipedia and Stack Exchange APIs. Tests will skip if the services are unreachable or return 429 rate-limit errors.
+

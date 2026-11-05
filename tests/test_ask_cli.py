@@ -213,6 +213,29 @@ def test_ask_web_flag_forces_web_mode(monkeypatch: t.Any, tmp_path: t.Any) -> No
     assert received_params.get("web") is True
 
 
+def test_ask_no_knowledge_flag_sets_no_knowledge(monkeypatch: t.Any, tmp_path: t.Any) -> None:
+    """The --no-knowledge flag should be passed through."""
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+
+    received_params: dict[str, t.Any] = {}
+
+    async def fake_ask(*args: t.Any, no_knowledge: bool = False, **kwargs: t.Any) -> Answer:
+        received_params["no_knowledge"] = no_knowledge
+        return Answer(
+            question="test",
+            text="test",
+            used_llm=False,
+            sources=[],
+            timings={},
+            warnings=[],
+        )
+
+    monkeypatch.setattr(cli_module, "_ASK", fake_ask)
+
+    runner.invoke(cli_module.app, ["ask", "test", "--no-knowledge"])
+    assert received_params.get("no_knowledge") is True
+
+
 def test_ask_no_api_flag_sets_no_api(monkeypatch: t.Any, tmp_path: t.Any) -> None:
     """The --no-api flag should be passed through."""
     monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
@@ -326,6 +349,9 @@ def test_ask_json_output_format(monkeypatch: t.Any, tmp_path: t.Any) -> None:
     assert payload["sources"][0]["url"] == "https://python.org/3.12"
     assert payload["sources"][0]["domain"] == "python.org"
     assert payload["sources"][0]["method"] == "LOCAL"
+    assert "license" in payload["sources"][0]
+    assert "author" in payload["sources"][0]
+    assert "passages" in payload["sources"][0]
     assert "timings" in payload
     assert "warnings" in payload
 
@@ -523,3 +549,196 @@ def test_ask_plain_has_no_ansi(monkeypatch: t.Any, tmp_path: t.Any) -> None:
     result = runner.invoke(cli_module.app, ["ask", "test", "--plain"])
     assert result.exit_code == 0, result.stderr
     assert "\x1b" not in result.stdout
+
+
+# --- T10.7: Knowledge source badges, license, author, footer counts --------------
+
+
+def test_ask_renders_wiki_source_with_license(monkeypatch: t.Any, tmp_path: t.Any) -> None:
+    """Rendered output should show WIKI source with CC BY-SA license."""
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+
+    fake_answer = Answer(
+        question="What is Python?",
+        text="Python is a programming language.",
+        used_llm=True,
+        sources=[
+            (
+                1,
+                "Python (programming language)",
+                "https://en.wikipedia.org/wiki/Python_(programming_language)",
+                "wikipedia.org",
+                "WIKI",
+                "Python is a high-level programming language...",
+                "CC BY-SA 4.0",
+                "",
+                "",
+            )
+        ],
+        timings={"search": 0.1},
+        warnings=[],
+    )
+
+    async def fake_ask(*args: t.Any, **kwargs: t.Any) -> Answer:
+        return fake_answer
+
+    monkeypatch.setattr(cli_module, "_ASK", fake_ask)
+
+    result = runner.invoke(cli_module.app, ["ask", "What is Python?"])
+    assert result.exit_code == 0, result.stderr
+    assert "WIKI" in result.stdout
+    assert "CC BY-SA" in result.stdout
+
+
+def test_ask_renders_so_source_with_author(monkeypatch: t.Any, tmp_path: t.Any) -> None:
+    """Rendered output should show SO source with author name."""
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+
+    fake_answer = Answer(
+        question="How do I install Python?",
+        text="Use the package manager.",
+        used_llm=True,
+        sources=[
+            (
+                1,
+                "How to install Python on Windows",
+                "https://stackoverflow.com/questions/12345",
+                "stackoverflow.com",
+                "SO",
+                "Download from python.org and run the installer.",
+                "CC BY-SA 4.0",
+                "John Developer",
+                "",
+            )
+        ],
+        timings={"search": 0.1},
+        warnings=[],
+    )
+
+    async def fake_ask(*args: t.Any, **kwargs: t.Any) -> Answer:
+        return fake_answer
+
+    monkeypatch.setattr(cli_module, "_ASK", fake_ask)
+
+    result = runner.invoke(cli_module.app, ["ask", "How do I install Python?"])
+    assert result.exit_code == 0, result.stderr
+    assert "SO" in result.stdout
+    assert "by John Developer" in result.stdout
+    assert "CC BY-SA" in result.stdout
+
+
+def test_ask_footer_shows_method_counts(monkeypatch: t.Any, tmp_path: t.Any) -> None:
+    """Footer should show counts by method including WIKI and SO."""
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+
+    fake_answer = Answer(
+        question="test",
+        text="Answer text.",
+        used_llm=True,
+        sources=[
+            (
+                1,
+                "Wiki Source",
+                "https://en.wikipedia.org/wiki/test",
+                "wikipedia.org",
+                "WIKI",
+                "Wiki content",
+                "",
+                "",
+                "",
+            ),
+            (
+                2,
+                "SO Source",
+                "https://stackoverflow.com/questions/1",
+                "stackoverflow.com",
+                "SO",
+                "SO content",
+                "CC BY-SA 4.0",
+                "User123",
+                "",
+            ),
+            (
+                3,
+                "Local Source",
+                "https://example.com/page",
+                "example.com",
+                "LOCAL",
+                "Local content",
+                "",
+                "",
+                "",
+            ),
+        ],
+        timings={"search": 0.1},
+        warnings=[],
+    )
+
+    async def fake_ask(*args: t.Any, **kwargs: t.Any) -> Answer:
+        return fake_answer
+
+    monkeypatch.setattr(cli_module, "_ASK", fake_ask)
+
+    result = runner.invoke(cli_module.app, ["ask", "test"])
+    assert result.exit_code == 0, result.stderr
+    # Footer format: "1 wiki · 1 so · 1 local"
+    assert "wiki" in result.stdout.lower()
+    assert "so" in result.stdout.lower()
+
+
+def test_ask_json_includes_license_and_author(monkeypatch: t.Any, tmp_path: t.Any) -> None:
+    """JSON output should include license and author for sources."""
+    import json
+
+    monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
+
+    fake_answer = Answer(
+        question="What is Python?",
+        text="Python is a programming language.",
+        used_llm=True,
+        sources=[
+            (
+                1,
+                "Python (programming language)",
+                "https://en.wikipedia.org/wiki/Python",
+                "wikipedia.org",
+                "WIKI",
+                "Python content",
+                "CC BY-SA 4.0",
+                "",
+                "",
+            ),
+            (
+                2,
+                "How to install Python",
+                "https://stackoverflow.com/questions/1",
+                "stackoverflow.com",
+                "SO",
+                "Use the installer",
+                "CC BY-SA 4.0",
+                "Jane Developer",
+                "",
+            ),
+        ],
+        timings={"search": 0.1, "fetch": 0.1},
+        warnings=[],
+    )
+
+    async def fake_ask(*args: t.Any, **kwargs: t.Any) -> Answer:
+        return fake_answer
+
+    monkeypatch.setattr(cli_module, "_ASK", fake_ask)
+
+    result = runner.invoke(cli_module.app, ["ask", "What is Python?", "--json"])
+    assert result.exit_code == 0, result.stderr
+
+    payload = json.loads(result.stdout)
+    assert len(payload["sources"]) == 2
+
+    # Wiki source has license, no author
+    assert payload["sources"][0]["license"] == "CC BY-SA 4.0"
+    assert payload["sources"][0]["author"] == ""
+
+    # SO source has both license and author
+    assert payload["sources"][1]["license"] == "CC BY-SA 4.0"
+    assert payload["sources"][1]["author"] == "Jane Developer"
