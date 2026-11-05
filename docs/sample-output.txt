@@ -23,12 +23,13 @@ What each scenario is for:
      other cards rendering.
   5. Long titles, long summaries, a long domain - the wrapping case.
 
-Ask mode scenarios (T9.7):
+Ask mode scenarios (T9.7, T10.7):
 
   A1. Answered with sources - happy path with LLM
   A2. No model available - passages only with warning
   A3. Sources disagree - answer states disagreement
-  A4. Nothing found - clear error message
+  A4. Knowledge sources (Wiki + SO) - answer with Wikipedia and Stack Exchange
+  A5. Nothing found - clear error message
 
 ====================================================================================================
 1. All local, all good (the happy path)  [width 100]
@@ -276,7 +277,13 @@ A1. Answered with sources (LLM available)  [width 100]
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 [1] Python 3.12 Released  [LOCAL]
+python.org
+Python 3.12 brought many improvements including the new type parameter syntax.
+https://python.org/downloads/
 [2] Python Release Schedule  [LOCAL]
+python.org
+Python 3.13 is currently in the development phase with planned October 2025 release.
+https://python.org/devcycle/
                                                                                                     
   2 local · 2 sources (LLM) ·  · search: 0.45s · fetch: 1.23s · model: 0.89s                        
                                                                                                     
@@ -294,7 +301,14 @@ A2. No model available (passages only)  [width 100]
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 [1] Definition of ML  [LOCAL]
+example.org
+Machine learning is a subset of artificial intelligence that enables computers to learn from data 
+without being explicitly programmed.
+https://example.org/ml-basics
 [2] Applications  [LOCAL]
+example.org
+Applications include image recognition, natural language processing, and predictive analytics.
+https://example.org/ml-apps
                                                                                                     
   2 local · 2 sources (passages) ·  · search: 0.32s · fetch: 0.91s ·  · No Gemini API key found;    
   returning passages only.                                                                          
@@ -309,7 +323,49 @@ A3. Sources disagree (clearly stated)  [width 100]
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 [1] Python 3.12.3 Released  [LOCAL]
+python.org
+Python 3.12.3 is the latest stable release as of today.
+https://python.org/downloads/
 [2] Python 3.13 Ships Ahead of Schedule  [LOCAL]
+techcrunch.com
+Python 3.13.0 was officially released on October 14, 2026, earlier than expected.
+https://techcrunch.com/2026/10/15/python-3-13
                                                                                                     
   2 local · 2 sources (LLM) ·  · search: 0.51s · fetch: 1.45s · model: 0.67s                        
+                                                                                                    
+
+====================================================================================================
+A4. Knowledge sources (Wiki + SO)  [width 100]
+====================================================================================================
+╭───────────────────────────────────────────── Answer ─────────────────────────────────────────────╮
+│ Python is a high-level, interpreted programming language known for its clear syntax and          │
+│ readability. It was created by Guido van Rossum in 1991 and first released in 1994.              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+[1] Python (programming language)  [WIKI]
+wikipedia.org
+Python is a high-level, interpreted programming language known for its clear syntax and readability.
+It was created by Guido van Rossum and first released in 1991. Python emphasizes code readability 
+with its notable use of whitespace.
+CC BY-SA 4.0
+https://en.wikipedia.org/wiki/Python_(programming_language)
+[2] How to install Python on Windows  [SO]
+stackoverflow.com
+Download the installer from python.org and run it. Make sure to check 'Add Python to PATH' during 
+installation options. Python 3.12 is the latest stable version as of 2024.
+CC BY-SA 4.0, by Jane Developer
+https://stackoverflow.com/questions/12345/how-to-install-python
+                                                                                                    
+  2 sources (LLM) ·  · search: 0.35s · fetch: 0.82s                                                 
+                                                                                                    
+
+====================================================================================================
+A5. Nothing found (clear error)  [width 100]
+====================================================================================================
+╭───────────────────────────────────────────── Answer ─────────────────────────────────────────────╮
+│ No sources available to answer the query.                                                        │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+                                                                                                    
+  0 sources (passages) ·  · search: 0.01s · fetch: 0.00s ·  · No search results found for query.    
                                                                                                     

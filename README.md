@@ -139,7 +139,7 @@ from the fetched pages with a warning — never a made-up answer. Sample output:
 [1] Python 3.12 Released  [LOCAL]
 [2] Python Release Schedule  [LOCAL]
                                                                                                   
-  2 local · 2 sources (LLM) · search: 0.45s · fetch: 1.23s · model: 0.89s
+  2 local · 2 sources (LLM) ·  · search: 0.45s · fetch: 1.23s · model: 0.89s
 ```
 
 The `--json` output is:
@@ -150,13 +150,51 @@ The `--json` output is:
   "answer": "Python 3.12 is the latest stable release...",
   "used_llm": true,
   "sources": [
-    {"number": 1, "title": "Python 3.12 Released", "url": "https://...", "domain": "python.org", "method": "LOCAL", "text": "..."},
+    {"number": 1, "title": "Python 3.12 Released", "url": "https://...", "domain": "python.org", "method": "LOCAL", "passages": "...", "license": "", "author": ""},
     ...
   ],
   "timings": {"search": 0.45, "fetch": 1.23, "model": 0.89},
   "warnings": []
 }
 ```
+
+### Knowledge sources
+
+Ask mode can augment web search results with knowledge from structured APIs:
+
+| Source | Covers | When chosen |
+|---|---|---|
+| **Wikipedia** | Encyclopedic questions ("what is X", "who was Y", "history of Z") | Questions with cues like "what is", "who is", "define", "history of" |
+| **Stack Exchange** | Developer questions ("how do I X in Python", exception names) | Questions with error messages, code snippets, or language/framework names |
+
+Configuration in `config/briefing.yaml.example`:
+
+```yaml
+knowledge:
+  enabled: true           # Set to false to disable all knowledge sources
+  wikipedia: true         # Enable Wikipedia adapter
+  stackexchange: true     # Enable StackExchange adapter
+  ddg_instant: false      # DuckDuckGo Instant Answer (low reliability)
+  timeout_s: 5            # Per-adapter timeout
+  stackexchange_key_env: STACKEXCHANGE_KEY  # Optional env var for higher quota
+  quota_floor: 20         # Skip calls when quota remaining at or below this
+```
+
+**Licenses:** Wikipedia and Stack Exchange passages are CC BY-SA 4.0 licensed. The source
+card shows the license, and for Stack Exchange posts it shows the author's display name.
+
+**Usage:**
+
+```bash
+briefing -a "what is the Python programming language?"
+# Returns an answer with [1] from Wikipedia, [2] from Stack Overflow, etc.
+```
+
+**Flags:**
+
+| Flag | Effect |
+|---|---|
+| `--no-knowledge` | Disable knowledge source integration |
 
 ### Briefing mode
 

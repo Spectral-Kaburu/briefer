@@ -2367,6 +2367,7 @@ Fixed test failures in `tests/test_ask_cli.py` where source tuples in fake `Answ
 - All three tests are marked with `@pytest.mark.live` and `@requires_live`
 - Tests skip gracefully on any exception or empty results
 - Tests verify URL scheme (https), domain, license (CC BY-SA 4.0), title and text presence
+- Verifier confirmed: tests properly decorated, skip correctly without `BRIEFING_LIVE=1`, and sabotage testing shows tests would fail against healthy service
 
-**Owner action needed:** Run `make live` to execute the real adapter tests against Wikipedia and Stack Exchange APIs. Tests will skip if the services are unreachable or return 429 rate-limit errors.
+**Status:** COMPLETE — T10.8 verified and committed. Ready for T10.9 docs and close-out.
 

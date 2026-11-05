@@ -49,12 +49,13 @@ What each scenario is for:
      other cards rendering.
   5. Long titles, long summaries, a long domain - the wrapping case.
 
-Ask mode scenarios (T9.7):
+Ask mode scenarios (T9.7, T10.7):
 
   A1. Answered with sources - happy path with LLM
   A2. No model available - passages only with warning
   A3. Sources disagree - answer states disagreement
-  A4. Nothing found - clear error message
+  A4. Knowledge sources (Wiki + SO) - answer with Wikipedia and Stack Exchange
+  A5. Nothing found - clear error message
 """
 
 
@@ -222,6 +223,9 @@ ASK_SCENARIOS = {
                 "python.org",
                 "LOCAL",
                 "Python 3.12 brought many improvements including the new type parameter syntax.",
+                "",
+                "",
+                "",
             ),
             (
                 2,
@@ -230,6 +234,9 @@ ASK_SCENARIOS = {
                 "python.org",
                 "LOCAL",
                 "Python 3.13 is currently in the development phase with planned October 2025 release.",
+                "",
+                "",
+                "",
             ),
         ],
         timings={"search": 0.45, "fetch": 1.23, "model": 0.89},
@@ -251,6 +258,9 @@ Applications include image recognition, natural language processing, and predict
                 "example.org",
                 "LOCAL",
                 "Machine learning is a subset of artificial intelligence that enables computers to learn from data without being explicitly programmed.",
+                "",
+                "",
+                "",
             ),
             (
                 2,
@@ -259,6 +269,9 @@ Applications include image recognition, natural language processing, and predict
                 "example.org",
                 "LOCAL",
                 "Applications include image recognition, natural language processing, and predictive analytics.",
+                "",
+                "",
+                "",
             ),
         ],
         timings={"search": 0.32, "fetch": 0.91},
@@ -276,6 +289,9 @@ Applications include image recognition, natural language processing, and predict
                 "python.org",
                 "LOCAL",
                 "Python 3.12.3 is the latest stable release as of today.",
+                "",
+                "",
+                "",
             ),
             (
                 2,
@@ -284,10 +300,52 @@ Applications include image recognition, natural language processing, and predict
                 "techcrunch.com",
                 "LOCAL",
                 "Python 3.13.0 was officially released on October 14, 2026, earlier than expected.",
+                "",
+                "",
+                "",
             ),
         ],
         timings={"search": 0.51, "fetch": 1.45, "model": 0.67},
         warnings=[],
+    ),
+    "A4. Knowledge sources (Wiki + SO)": Answer(
+        question="What is the Python programming language?",
+        text="Python is a high-level, interpreted programming language known for its clear syntax and readability. It was created by Guido van Rossum in 1991 and first released in 1994.",
+        used_llm=True,
+        sources=[
+            (
+                1,
+                "Python (programming language)",
+                "https://en.wikipedia.org/wiki/Python_(programming_language)",
+                "wikipedia.org",
+                "WIKI",
+                "Python is a high-level, interpreted programming language known for its clear syntax and readability. It was created by Guido van Rossum and first released in 1991. Python emphasizes code readability with its notable use of whitespace.",
+                "CC BY-SA 4.0",
+                "",
+                "",
+            ),
+            (
+                2,
+                "How to install Python on Windows",
+                "https://stackoverflow.com/questions/12345/how-to-install-python",
+                "stackoverflow.com",
+                "SO",
+                "Download the installer from python.org and run it. Make sure to check 'Add Python to PATH' during installation options. Python 3.12 is the latest stable version as of 2024.",
+                "CC BY-SA 4.0",
+                "Jane Developer",
+                "",
+            ),
+        ],
+        timings={"search": 0.35, "fetch": 0.82},
+        warnings=[],
+    ),
+    "A5. Nothing found (clear error)": Answer(
+        question="xyznonexistentquery12345",
+        text="No sources available to answer the query.",
+        used_llm=False,
+        sources=[],
+        timings={"search": 0.01, "fetch": 0.0},
+        warnings=["No search results found for query."],
     ),
 }
 
@@ -314,6 +372,7 @@ def _render_answer(answer: Answer, *, plain: bool = False) -> str:
     """Render an Answer to a string (plain text mode, width 100).
 
     This mirrors `_render_answer` from cli.py but returns a string.
+    Handles both 6-element and 9-element source tuples for compatibility.
     """
     from rich import box
     from rich.console import Console
@@ -333,10 +392,18 @@ def _render_answer(answer: Answer, *, plain: bool = False) -> str:
     )
     console.print(answer_panel)
 
-    # 2. Numbered source list
+    # 2. Numbered source list - handle both 6 and 9 element tuples
     console.print()
-    for num, title, url, domain, method, text in answer.sources:
-        # Build method badge text
+    for source in answer.sources:
+        if len(source) == 9:
+            num, title, url, domain, method, text, license, author, _snippet = source
+        else:
+            # Backward compatible with 6-element tuples
+            num, title, url, domain, method, text = source[:6]
+            license = source[6] if len(source) > 6 else ""
+            author = source[7] if len(source) > 7 else ""
+            _snippet = source[8] if len(source) > 8 else ""
+
         badge_text = f"[{method}]"
 
         line = Text()
@@ -345,13 +412,40 @@ def _render_answer(answer: Answer, *, plain: bool = False) -> str:
         line.append(f"  {badge_text}")
         console.print(line)
 
+        # Show domain on its own line
+        domain_line = Text()
+        domain_line.append(domain, "dim")
+        console.print(domain_line)
+
+        # Show text content (summary/passage)
+        if text:
+            console.print(text)
+
+        # Show license and author (like research mode cards)
+        if license:
+            license_line = Text()
+            license_line.append(license, "cyan")
+            if author:
+                license_line.append(f", by {author}", "bright_black")
+            console.print(license_line)
+
+        # Show URL
+        if url:
+            url_line = Text()
+            url_line.append(url, "blue")
+            console.print(url_line)
+
     # 3. Footer with timings and warnings
     footer_parts = []
 
-    # Source counts by method
-    local_count = sum(1 for s in answer.sources if s[4] == "LOCAL")
-    api_count = sum(1 for s in answer.sources if s[4] == "API")
-    snippet_count = sum(1 for s in answer.sources if s[4] == "SNIPPET")
+    # Source counts by method (handle both 6 and 9 element tuples)
+    source_methods = [s[4] for s in answer.sources]
+    local_count = sum(1 for m in source_methods if m == "LOCAL")
+    api_count = sum(1 for m in source_methods if m == "API")
+    snippet_count = sum(1 for m in source_methods if m == "SNIPPET")
+    wiki_count = sum(1 for m in source_methods if m == "WIKI")
+    so_count = sum(1 for m in source_methods if m == "SO")
+    ddga_count = sum(1 for m in source_methods if m == "DDGA")
 
     if local_count or api_count:
         counts_parts = []
@@ -361,6 +455,12 @@ def _render_answer(answer: Answer, *, plain: bool = False) -> str:
             counts_parts.append(f"{api_count} API")
         if snippet_count:
             counts_parts.append(f"{snippet_count} snippet")
+        if wiki_count:
+            counts_parts.append(f"{wiki_count} wiki")
+        if so_count:
+            counts_parts.append(f"{so_count} so")
+        if ddga_count:
+            counts_parts.append(f"{ddga_count} ddga")
         footer_parts.append(" · ".join(counts_parts))
 
     if answer.used_llm:
