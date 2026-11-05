@@ -404,10 +404,14 @@ def _render_passages(sources: list[EvidenceSource]) -> str:
     for s in sources:
         paragraphs.append(f"[{s.number}] {s.title}\n{s.text}")
 
-    if paragraphs:
+    if len(paragraphs) > 1:
+        # Only mention disagreement when there are multiple sources
         return (
             "\n\n".join(paragraphs) + "\n\nSources disagree on some points; see above for context."
         )
+
+    if paragraphs:
+        return paragraphs[0]
 
     return "No sources available to answer the query."
 

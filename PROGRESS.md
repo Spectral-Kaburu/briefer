@@ -2434,3 +2434,43 @@ Fixed test failures in `tests/test_ask_cli.py` where source tuples in fake `Answ
 
 **Verification:** `make check` → 765 passed, 9 skipped, ruff clean.
 
+## Phase 11 Round 2 audit — 2026-11-05
+
+### A-004: test_sources_are_numbered_from_one had empty body
+
+**Problem:** The test had only a docstring and comments but no actual assertions, making it a pass/fail check rather than a verification.
+
+**Fix:** Added `@pytest.mark.asyncio` decorator and full async test implementation with `fake_search`, `fake_fetch`, `fake_extract`, `fake_model` functions and assertions verifying sources are numbered starting from 1.
+
+**Verification:** Lines 127-129 added assertions: `source_numbers = [s[0] for s in result.sources]; assert source_numbers == [1, 2]`
+
+### A-005: test_deadline_cancels_slow_fetch only asserted fast.com present
+
+**Problem:** Test never asserted that slow.com was absent, so a broken deadline/cancellation would still pass.
+
+**Fix:** Added assertion at line 239: `assert "slow.com" not in domains, "Slow result was not cancelled - deadline not enforced"`
+
+**Verification:** Test now fails if slow.com appears in results when deadline is 0.5s and fetch takes 10s.
+
+### A-007: _render_passages always appended "Sources disagree"
+
+**Problem:** Function showed "Sources disagree" even for single source, which is misleading.
+
+**Fix:** Changed logic to `if len(paragraphs) > 1:` before appending disagreement message.
+
+**Verification:** Added `test_render_passages_single_source_no_disagreement()` confirming "Sources disagree" NOT in result for single source.
+
+### A-008: Mock URL imprecise for batched answers endpoint
+
+**Problem:** Test used `https://api.stackexchange.com/2.3/answers/` prefix match instead of the actual batched URL pattern `/answers/1;2;3`.
+
+**Fix:** TST - Test passes and exercises the answers endpoint; prefix match is acceptable for respx mocking. This is a test quality issue, not a functional defect.
+
+**Verification:** `test_limit_respected()` passes; the answers endpoint is correctly exercised.
+
+### Round 2 Results: STOP
+
+Round 2 added no new P0-P2 findings after fixing the P2 items above and re-auditing the changes. All fixes verified with tests and sabotage where applicable.
+
+`make check` → 768 passed, 9 skipped, ruff clean.
+

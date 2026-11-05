@@ -95,10 +95,38 @@ def test_answer_with_no_llm_returns_passages_and_warning() -> None:
 # --- Test: numbering sources correctly -------------------------------------
 
 
-def test_sources_are_numbered_from_one(sample_hits: list[FakeSearchResult]) -> None:
+@pytest.mark.asyncio
+async def test_sources_are_numbered_from_one(sample_hits: list[FakeSearchResult]) -> None:
     """Each source should be numbered starting from 1 in the Answer."""
-    # This test will verify that when we call ask(), sources are numbered
-    # We'll create a simple mock flow
+    calls_made: list[str] = []
+
+    async def fake_search(query: str) -> list[FakeSearchResult]:
+        return sample_hits  # type: ignore
+
+    async def fake_fetch(hit: FakeSearchResult) -> tuple[str, str, str]:
+        calls_made.append(hit.url)
+        return hit.title, hit.snippet, f"# {hit.title}\n{hit.snippet}"
+
+    def fake_extract(
+        markdown: str, heading: str, url: str, search_title: str, query: str | None
+    ) -> tuple[str, str]:
+        return heading, markdown[:50] if markdown else ""
+
+    async def fake_model(prompt: str, query: str) -> str | None:
+        return f"Answer with {len(calls_made)} sources"
+
+    result = await ask(
+        query="test query",
+        search=fake_search,  # type: ignore
+        fetch=fake_fetch,  # type: ignore
+        extract=fake_extract,
+        model=fake_model,
+        pages=2,
+    )
+
+    # Sources should be numbered starting from 1
+    source_numbers = [s[0] for s in result.sources]
+    assert source_numbers == [1, 2], f"Expected [1, 2], got {source_numbers}"
 
 
 # --- Test: one-per-host selection ----------------------------------------
@@ -206,8 +234,9 @@ async def test_deadline_cancels_slow_fetch() -> None:
 
     # Fast result should be included, slow one should be cancelled
     domains = [s[3] for s in result.sources]
-    assert "fast.com" in domains
-    # Slow result may or may not be there depending on timing
+    assert "fast.com" in domains, "Fast result should be included"
+    # Slow result must NOT be present - it timed out and was cancelled
+    assert "slow.com" not in domains, "Slow result was not cancelled - deadline not enforced"
 
 
 # --- Test: date in prompt --------------------------------------------------
@@ -502,6 +531,73 @@ async def test_model_failure_degrades_to_passages() -> None:
 
     assert result.used_llm is False
     assert any("Model" in w or " passages" in w.lower() for w in result.warnings)
+
+
+# --- Test: passages rendering --------------------------------------------
+
+
+def test_render_passages_single_source_no_disagreement() -> None:
+    """Single source should not mention disagreement."""
+    from briefing.ask import EvidenceSource, _render_passages
+
+    sources = [
+        EvidenceSource(
+            number=1,
+            source="Test",
+            domain="example.com",
+            title="Test Title",
+            url="https://example.com",
+            method="LOCAL",
+            text="Test content",
+            snippet="",
+        )
+    ]
+
+    result = _render_passages(sources)
+    assert "Sources disagree" not in result
+    assert "[1] Test Title" in result
+    assert "Test content" in result
+
+
+def test_render_passages_multiple_sources_shows_disagreement() -> None:
+    """Multiple sources should mention disagreement."""
+    from briefing.ask import EvidenceSource, _render_passages
+
+    sources = [
+        EvidenceSource(
+            number=1,
+            source="Site A",
+            domain="site-a.com",
+            title="Article A",
+            url="https://site-a.com",
+            method="LOCAL",
+            text="Content A",
+            snippet="",
+        ),
+        EvidenceSource(
+            number=2,
+            source="Site B",
+            domain="site-b.com",
+            title="Article B",
+            url="https://site-b.com",
+            method="LOCAL",
+            text="Content B",
+            snippet="",
+        ),
+    ]
+
+    result = _render_passages(sources)
+    assert "Sources disagree" in result
+    assert "[1] Article A" in result
+    assert "[2] Article B" in result
+
+
+def test_render_passages_empty_sources() -> None:
+    """Empty sources should return 'no sources available' message."""
+    from briefing.ask import _render_passages
+
+    result = _render_passages([])
+    assert result == "No sources available to answer the query."
 
 
 # --- Import asyncio for the async tests ---------------------------------
