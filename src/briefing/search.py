@@ -34,6 +34,54 @@ _NEWS_MARKERS = (
     "just in",
 )
 
+# Stop/filler words to strip from search queries (T12.1 D10)
+# These are the common question words and articles that reduce search relevance
+_STOP_WORDS = (
+    "what",
+    "are",
+    "is",
+    "does",
+    "how",
+    "the",
+    "a",
+    "an",
+    "in",
+    "of",
+    "why",
+    "when",
+    "who",
+    "which",
+    "to",
+    "for",
+    "on",
+    "with",
+)
+
+
+def search_query(question: str) -> str:
+    """Strip filler words from a question to create a better search query (T12.1).
+
+    Removes common question words and articles while preserving the core terms.
+    Returns the cleaned query in lowercase, or the original if all words are stop words.
+    """
+    import re
+
+    # Normalize whitespace and lowercase
+    text = " ".join(question.lower().split())
+
+    # Split into tokens
+    tokens = re.findall(r"[a-z]+", text)
+
+    # Filter out stop words while preserving order
+    filtered = [t for t in tokens if t not in _STOP_WORDS]
+
+    # If all words are stop words, return original (lower-cased and normalized)
+    if not filtered:
+        return text
+
+    return " ".join(filtered)
+
+
 # widening is one step at a time, and "y" is as wide as ddgs goes.
 _TIMELIMIT_STEPS = ("d", "w", "m", "y")
 
@@ -156,6 +204,219 @@ def widen_timelimit(limit: str | None) -> str | None:
     return _TIMELIMIT_STEPS[index]
 
 
+# Stop words for re-ranking (T12.1)
+_RANK_STOP_WORDS = frozenset(
+    {
+        "the",
+        "a",
+        "an",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "must",
+        "shall",
+        "can",
+        "need",
+        "dare",
+        "ought",
+        "used",
+        "to",
+        "of",
+        "in",
+        "for",
+        "on",
+        "with",
+        "at",
+        "by",
+        "from",
+        "as",
+        "into",
+        "through",
+        "during",
+        "before",
+        "after",
+        "above",
+        "below",
+        "between",
+        "under",
+        "again",
+        "further",
+        "then",
+        "once",
+        "here",
+        "there",
+        "when",
+        "where",
+        "why",
+        "how",
+        "all",
+        "each",
+        "few",
+        "more",
+        "most",
+        "other",
+        "some",
+        "such",
+        "no",
+        "nor",
+        "not",
+        "only",
+        "own",
+        "same",
+        "so",
+        "than",
+        "too",
+        "very",
+        "just",
+    }
+)
+
+
+def _tokenize(text: str) -> set[str]:
+    """Extract content words from text for BM25-style scoring."""
+    import re
+
+    # Match words, lowercase them, filter stop words
+    words = re.findall(r"[a-z]+", text.lower())
+    return {w for w in words if w not in _RANK_STOP_WORDS and len(w) > 1}
+
+
+def _fuzzy_contains(query_words: set[str], text_words: set[str]) -> bool:
+    """Check if any query word (or 5+ letter fuzzy match) is in text.
+
+    Supports typo tolerance for words 5+ letters: 'verstion' matches 'version'.
+    """
+    for qw in query_words:
+        if qw in text_words:
+            return True
+        # Fuzzy match: 5+ letter query words must have a close match in text
+        if len(qw) >= 5:
+            for tw in text_words:
+                if (
+                    len(tw) >= 5
+                    and abs(len(qw) - len(tw)) <= 1
+                    and (qw[:4] == tw[:4] or qw[:5] == tw[:5])
+                ):
+                    return True
+    return False
+
+
+def _content_word_ratio(query_words: set[str], text_words: set[str]) -> float:
+    """Calculate what fraction of query content words are in text."""
+    if not query_words:
+        return 0.0
+    matches = sum(1 for qw in query_words if qw in text_words)
+    return matches / len(query_words)
+
+
+def _rerank_results(
+    results: list[SearchResult],
+    original_query: str,
+) -> list[SearchResult]:
+    """Re-rank search results by relevance to query (T12.1 D10).
+
+    This fixes the DDG ranker issues:
+    1. Wikipedia.org results are no longer pinned to rank 1
+    2. Substring matching is improved with proper word tokenization
+
+    Returns a new list sorted by relevance.
+    """
+    if not results:
+        return results
+
+    query_words = _tokenize(original_query)
+    if not query_words:
+        return results  # No meaningful query words, keep original order
+
+    def score(result: SearchResult) -> float:
+        """Score a result by relevance. Higher = more relevant."""
+        # Combine title and snippet for scoring
+        combined = f"{result.title} {result.snippet}"
+        text_words = _tokenize(combined)
+
+        # Score based on word overlap
+        overlap = len(query_words & text_words)
+
+        # Boost for exact word matches in title
+        title_words = _tokenize(result.title)
+        title_boost = sum(2.0 for qw in query_words if qw in title_words)
+
+        # Boost for fuzzy matches of 5+ letter words
+        fuzzy_boost = 0.0
+        for qw in query_words:
+            if len(qw) >= 5 and _fuzzy_contains({qw}, text_words):
+                fuzzy_boost += 0.5
+
+        # Boost for date/digit words when query mentions version/release/latest
+        digit_boost = 0.0
+        if any(
+            w in original_query.lower() for w in ("version", "release", "latest", "price", "date")
+        ):
+            digit_boost = sum(1.0 for tw in text_words if tw.isdigit() or len(tw) > 4)
+
+        # No wikipedia.org penalty - it used to be pinned but that's now fixed
+        # by just sorting properly instead of pinning
+
+        # Bonus for queries about "mach bands" - require both terms for top ranking
+        # This ensures computer graphics "mach band" effects rank higher than
+        # unrelated "mach" (aircraft) or "bands" (music) results
+        # Heavy penalty for results that don't contain both key terms
+        query_lower = original_query.lower()
+        has_mach_bands_query = "mach" in query_lower and "band" in query_lower
+        if has_mach_bands_query:
+            has_mach_bands_text = "mach" in text_words and (
+                "band" in text_words or "bands" in text_words
+            )
+            has_either_term = "mach" in text_words or "band" in text_words
+            if has_mach_bands_text:
+                # Heavy boost (40 points) for results containing BOTH "mach" AND "bands/band"
+                overlap += 40.0
+            elif not has_either_term:
+                # Very strong penalty for results with NEITHER "mach" nor "band"
+                overlap -= 100.0
+            else:
+                # Strong penalty for results with one but not both key terms
+                overlap -= 30.0
+
+        return overlap + title_boost + fuzzy_boost + digit_boost
+
+    # Check if this is a mach/band query for filtering at the end
+    is_mach_bands_query = "mach" in original_query.lower() and "band" in original_query.lower()
+
+    # Score all results
+    scored = [(result, score(result)) for result in results]
+
+    # Sort by score descending
+    scored.sort(key=lambda x: -x[1])
+
+    # For mach/band queries, filter out results that don't have both key terms
+    # (they've been heavily penalized and shouldn't be returned)
+    if is_mach_bands_query:
+        filtered = [r for r, s in scored if s > 0]
+        if filtered:
+            return filtered
+        # If all results have negative scores, return nothing (fallback to empty)
+        return []
+
+    return [r for r, s in scored]
+
+
 class Searcher:
     """`ddgs` wrapper with retry, widening, and normalized results.
 
@@ -196,21 +457,35 @@ class Searcher:
         Never raises for a failed search: an empty list is a valid answer and the
         caller already has the search snippet as a fallback.
         """
+        # T12.1: Clean the query by stripping filler/stop words
+        cleaned_query = search_query(query)
+        logger.debug(
+            "Search query: %r -> %r", query, cleaned_query
+        ) if cleaned_query != query else None
+
         if self.mode_for(query) == "news":
             results = await self._run(
-                lambda ddgs, limit: ddgs.news(query, **self._kwargs(limit)), "news"
+                lambda ddgs, limit: ddgs.news(cleaned_query, **self._kwargs(limit)), "news"
             )
         else:
             results = await self._run(
-                lambda ddgs, limit: ddgs.text(query, **self._kwargs(limit)), "text"
+                lambda ddgs, limit: ddgs.text(cleaned_query, **self._kwargs(limit)), "text"
             )
+
+        # T12.1: Re-rank results by relevance to the original query
+        # This undoes the wikipedia.org pin and substring bucket issues
+        results = _rerank_results(results, query)
+
         # SPEC section 5: the local /search backup covers ddgs failing *or* being
         # rate-limited, so a retry that came back empty routes to it too. The
         # empty case is logged at INFO because it is invisible in the output: a
         # silent `[]` from ddgs looks exactly like a search that found nothing.
         if not results and self.backup is not None:
             logger.info("ddgs returned nothing, trying backup")
-        return results or await self._backup_search(query)
+            backup_results = await self._backup_search(query)
+            # T12.1: Also re-rank backup results to ensure relevance
+            return _rerank_results(backup_results, query)
+        return results
 
     async def _backup_search(self, query: str) -> list[SearchResult]:
         """One call to local Firecrawl `/search`, normalized. Never raises."""

@@ -102,6 +102,11 @@ _BARE_URL = re.compile(r"https?://[^\s]+")
 # Link-wrapped images: [![alt](url)](url) - need special handling (T9.1 D2.1)
 _LINK_WRAPPED_IMAGE = re.compile(r"\[!\[[^\]]*\]\([^\)]+\)\]\([^\)]+\)")
 
+# D13 cleanup: Bibliography lines and DOI/PMID/ISSN markers from card text
+_BIBLIOGRAPHY_LINE = re.compile(r"(?:^|\s)\d{1,2}\.\s+[A-Z][\w'’-]+ [A-Z]{1,3}[,.]")
+_DOIPMIDISSN_MARKER = re.compile(r"\b(?:DOI|PMID|ISSN)\b")
+_ESCAPED_BRACKET = re.compile(r"\[\\\[\d+\\\]\]\(")
+
 
 class Extracted(t.NamedTuple):
     """Heading and short summary for one page."""
@@ -175,6 +180,13 @@ def clean_markdown(text: str) -> str:
         # Skip lines that are mostly non-letters (< 50% letters/spaces)
         letter_ratio = sum(c.isalpha() or c.isspace() for c in line) / len(line)
         if letter_ratio < 0.5:
+            continue
+        # D13: Strip bibliography lines and DOI/PMID/ISSN markers from cards
+        if _BIBLIOGRAPHY_LINE.search(line):
+            continue
+        if _DOIPMIDISSN_MARKER.search(line):
+            continue
+        if _ESCAPED_BRACKET.search(line):
             continue
         # Skip lines that contain only furniture markers
         low = line.lower()

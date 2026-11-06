@@ -38,6 +38,15 @@ PLAIN_GREETING = "Good morning, {name}."
 
 
 @dataclasses.dataclass(frozen=True)
+class ModelResult:
+    """Result from a model generation call (T12.2 D11 fix)."""
+
+    text: str | None
+    finish_reason: str | None = None
+    usage: dict[str, int | None] | None = None
+
+
+@dataclasses.dataclass(frozen=True)
 class SpokenBriefing:
     """What `voice-tts` will say, and whether it is the model's or the fallback's.
 
@@ -109,16 +118,22 @@ class Gemini:
         self.api_key_env = api_key_env
         self._client: t.Any = None
 
-    async def generate(self, prompt: str) -> str | None:
-        """The model's text for `prompt`, or None when it produced none.
+    async def generate(self, prompt: str) -> ModelResult:
+        """Generate a response from Gemini, returning text and metadata (T12.2 D11 fix).
 
         The key comes from the configured environment variable via the SDK's
         explicit `api_key` parameter, so `GOOGLE_API_KEY` precedence cannot
         surprise anyone.
+
+        Logs finish_reason and usage at DEBUG (visible with --verbose).
         """
+        import logging
+
+        logger = logging.getLogger(__name__)
         import os
 
         from google import genai  # lazy: the extra is optional (pyproject)
+        from google.genai import types
 
         api_key = os.environ.get(self.api_key_env, "")
         if self._client is None:
@@ -126,9 +141,31 @@ class Gemini:
         response = await self._client.aio.models.generate_content(
             model=self.model,
             contents=prompt,
-            config=genai.types.GenerateContentConfig(max_output_tokens=self.max_output_tokens),
+            config=genai.types.GenerateContentConfig(
+                max_output_tokens=self.max_output_tokens,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
         )
-        return response.text
+
+        # T12.2: Log finish_reason and usage at DEBUG (visible with --verbose)
+        finish_reason = None
+        usage_info = None
+        if response.candidates:
+            finish_reason = str(response.candidates[0].finish_reason)
+            usage = response.usage_metadata
+            usage_info = {
+                "visible_tokens": getattr(usage, "candidates_token_count", None),
+                "thinking_tokens": getattr(usage, "thoughts_token_count", None),
+                "total_tokens": getattr(usage, "total_token_count", None),
+            }
+            logger.debug(
+                "Gemini response: finish_reason=%s visible_tokens=%s thinking_tokens=%s",
+                finish_reason,
+                usage_info.get("visible_tokens"),
+                usage_info.get("thinking_tokens"),
+            )
+
+        return ModelResult(text=response.text, finish_reason=finish_reason, usage=usage_info)
 
 
 class Speaker:
@@ -193,13 +230,30 @@ async def _generate(gemini: t.Any, prompt: t.Callable[[], str]) -> str | None:
     `prompts/briefing.txt` is a repo that cannot speak a briefing, which is the
     greeting, not a crash.
     """
+    import logging
+
+    logger = logging.getLogger(__name__)
     try:
-        text = await gemini.generate(prompt())
+        result = await gemini.generate(prompt())
+        # Handle both old-style (str | None) and new-style (ModelResult) returns
+        if isinstance(result, ModelResult):
+            text = result.text
+            finish_reason = result.finish_reason
+            # T12.2: Check for truncated responses (MAX_TOKENS, etc.)
+            if finish_reason and "MAX_TOKENS" in str(finish_reason):
+                logger.warning(
+                    "Model answer was cut off (finish_reason=%s); falling back to passages",
+                    finish_reason,
+                )
+                return None
+        else:
+            # Old-style return
+            text = result
+        if text is None or not text.strip():
+            return None
+        return str(text).strip()
     except Exception:  # noqa: BLE001 - any failure degrades, never raises
         return None
-    if text is None or not text.strip():
-        return None
-    return str(text).strip()
 
 
 # Research mode's prompts. They are not files like `prompts/briefing.txt` because

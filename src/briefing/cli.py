@@ -42,7 +42,7 @@ from briefing.log import configure as configure_logging
 from briefing.log import get_logger
 from briefing.pipeline import Pipeline, Report
 from briefing.search import Searcher, SearchResult
-from briefing.synth import Gemini, ResearchSynth, Speaker
+from briefing.synth import Gemini, ModelResult, ResearchSynth, Speaker
 from briefing.ui import UI, answer, card
 from briefing.whitelist import Whitelist, WhitelistEntry, normalize_host
 
@@ -179,12 +179,12 @@ async def _ask_implementation(
 
         llm = Gemini()
 
-        async def _model(prompt: str, query: str) -> str | None:
-            """Call the Gemini model."""
+        async def _model(prompt: str, query: str) -> ModelResult:
+            """Call the Gemini model and return ModelResult with metadata."""
             try:
                 return await llm.generate(prompt)
             except Exception:  # noqa: BLE001
-                return None
+                return ModelResult(text=None, finish_reason=None, usage=None)
 
         model = _model
 

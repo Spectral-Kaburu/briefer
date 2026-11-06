@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from briefing.fetch.router import Method
 from briefing.knowledge.base import KnowledgeSource, Passage
 from briefing.knowledge.route import choose_sources
+from briefing.synth import ModelResult
 from briefing.whitelist import normalize_host
 
 if t.TYPE_CHECKING:
@@ -234,14 +235,33 @@ async def ask(
         used_llm = False
     else:
         model_start = time.monotonic()
-        text = await model(prompt, query)
-        timings["model"] = time.monotonic() - model_start
-        if text is None:
-            warnings.append("Model returned no answer; returning passages instead.")
-            text = _render_passages(sources_data)
-            used_llm = False
+        result = await model(prompt, query)
+
+        # T12.2: Handle ModelResult or plain string
+        if isinstance(result, ModelResult):
+            text = result.text
+            finish_reason = result.finish_reason
+            # Check for truncated answer (MAX_TOKENS, etc.)
+            if text and finish_reason and "MAX_TOKENS" in str(finish_reason):
+                warnings.append("The model's answer was cut off; returning passages instead.")
+                text = None
+            if text is None:
+                warnings.append("Model returned no answer; returning passages instead.")
+                text = _render_passages(sources_data)
+                used_llm = False
+            else:
+                used_llm = True
         else:
-            used_llm = True
+            # Old-style return (plain string)
+            text = result
+            if text is None:
+                warnings.append("Model returned no answer; returning passages instead.")
+                text = _render_passages(sources_data)
+                used_llm = False
+            else:
+                used_llm = True
+
+        timings["model"] = time.monotonic() - model_start
 
     return Answer(
         question=query,
