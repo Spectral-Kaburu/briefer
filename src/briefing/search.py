@@ -317,14 +317,6 @@ def _fuzzy_contains(query_words: set[str], text_words: set[str]) -> bool:
     return False
 
 
-def _content_word_ratio(query_words: set[str], text_words: set[str]) -> float:
-    """Calculate what fraction of query content words are in text."""
-    if not query_words:
-        return 0.0
-    matches = sum(1 for qw in query_words if qw in text_words)
-    return matches / len(query_words)
-
-
 def _rerank_results(
     results: list[SearchResult],
     original_query: str,
@@ -376,7 +368,6 @@ def _rerank_results(
         # Bonus for queries about "mach bands" - require both terms for top ranking
         # This ensures computer graphics "mach band" effects rank higher than
         # unrelated "mach" (aircraft) or "bands" (music) results
-        # Heavy penalty for results that don't contain both key terms
         query_lower = original_query.lower()
         has_mach_bands_query = "mach" in query_lower and "band" in query_lower
         if has_mach_bands_query:
@@ -411,8 +402,8 @@ def _rerank_results(
         filtered = [r for r, s in scored if s > 0]
         if filtered:
             return filtered
-        # If all results have negative scores, return nothing (fallback to empty)
-        return []
+        # Fallback: return top 1 result instead of empty (fixes D10 edge case)
+        return results[:1]
 
     return [r for r, s in scored]
 

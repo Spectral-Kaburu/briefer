@@ -34,7 +34,7 @@ TIMEOUT_S = 240
 JUNK = {
     "bibliography line": re.compile(r"(?:^|\s)\d{1,2}\.\s+[A-Z][\w'’-]+ [A-Z]{1,3}[,.]"),
     "retrieved-date citation": re.compile(r"Retrieved\s+\w+\s+\d{1,2},\s+\d{4}"),
-    "DOI/PMID/ISSN marker": re.compile(r"\b(?:DOI|PMID|ISSN)\b"),
+    "DOI/PMID/ISSN marker": re.compile(r"^(?:DOI|PMID|ISSN)\s*[:：]"),
     "escaped-bracket link fragment": re.compile(r"\[\\\[\d+\\\]\]\("),
     "page chrome": re.compile(
         r"Cite This Page|You are here|Article Information|Skip to (?:main )?content"

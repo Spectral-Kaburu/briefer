@@ -104,7 +104,9 @@ _LINK_WRAPPED_IMAGE = re.compile(r"\[!\[[^\]]*\]\([^\)]+\)\]\([^\)]+\)")
 
 # D13 cleanup: Bibliography lines and DOI/PMID/ISSN markers from card text
 _BIBLIOGRAPHY_LINE = re.compile(r"(?:^|\s)\d{1,2}\.\s+[A-Z][\w'’-]+ [A-Z]{1,3}[,.]")
-_DOIPMIDISSN_MARKER = re.compile(r"\b(?:DOI|PMID|ISSN)\b")
+_DOIPMIDISSN_MARKER = re.compile(
+    r"^(?:DOI|PMID|ISSN)\s*[:：]"
+)  # Only match lines primarily being a marker
 _ESCAPED_BRACKET = re.compile(r"\[\\\[\d+\\\]\]\(")
 
 
