@@ -25,6 +25,16 @@ if t.TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: What a fetcher hands back: `(heading, summary, markdown)`, optionally followed
+#: by the `Method` that produced the page. `markdown` is the page itself, or ""
+#: when only the search snippet is left.
+FetchOutcome = tuple[str, str, str] | tuple[str, str, str, Method]
+
+#: `(stage, detail)` notifications for a live display. Stages, in order: "search",
+#: "searched" (hit count), "fetch" (page count), "fetched" (a domain, once per
+#: page), "model".
+ProgressFn = t.Callable[[str, str], None]
+
 # Prompt template for the answer model
 _ANSWER_PROMPT = """Answer the question in three sentences or fewer using only the sources below.
 State the answer first, then cite sources like [1]. If sources disagree, say so and name which sites.
@@ -101,7 +111,7 @@ async def ask(
     *,
     query: str,
     search: t.Callable[[str], t.Awaitable[list[SearchResult]]],
-    fetch: t.Callable[[SearchResult], t.Awaitable[tuple[str, str, str]]],
+    fetch: t.Callable[[SearchResult], t.Awaitable[FetchOutcome]],
     extract: t.Callable[[str, str, str, str, str | None], tuple[str, str]],
     model: t.Callable[[str, str], t.Awaitable[str | None]] | None = None,
     resolve_clock: t.Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -112,6 +122,7 @@ async def ask(
     knowledge_enabled: bool = True,
     knowledge_adapters: list[KnowledgeSource] | None = None,
     knowledge_config: t.Any = None,  # KnowledgeConfig for adapters
+    on_progress: ProgressFn | None = None,
 ) -> Answer:
     """Answer a question using fetched pages.
 
@@ -131,11 +142,21 @@ async def ask(
     timings: dict[str, float] = {}
     warnings: list[str] = []
 
+    def emit(stage: str, detail: str = "") -> None:
+        """Tell a live display what stage the run is in. Never lets it break the run."""
+        if on_progress is None:
+            return
+        try:
+            on_progress(stage, detail)
+        except Exception:
+            logger.debug("progress callback failed", exc_info=True)
+
     # 1. Determine which knowledge sources to use
     source_names = choose_sources(query) if knowledge_enabled else []
 
     # Track when search starts for timing
     search_start = time.monotonic()
+    emit("search")
 
     # 2. Start knowledge adapter lookups and web search concurrently under one deadline
     knowledge_passages: list[Passage] = []
@@ -181,6 +202,7 @@ async def ask(
         hits = search_task.result() if search_task in completed else []
 
     timings["search"] = time.monotonic() - search_start
+    emit("searched", str(len(hits)))
 
     if not hits:
         raise NoSearchResultsError(
@@ -209,6 +231,7 @@ async def ask(
 
     # 5. Fetch concurrently with deadline
     fetch_start = time.monotonic()
+    emit("fetch", str(len(selected)))
     fetched = await _fetch_with_deadline(
         selected,
         fetch,
@@ -216,6 +239,8 @@ async def ask(
         per_url_s=per_url_s,
         deadline_s=deadline_s,
         results=results,
+        query=query,
+        on_fetched=lambda domain: emit("fetched", domain),
     )
     timings["fetch"] = time.monotonic() - fetch_start
 
@@ -235,6 +260,7 @@ async def ask(
         used_llm = False
     else:
         model_start = time.monotonic()
+        emit("model")
         result = await model(prompt, query)
 
         # T12.2: Handle ModelResult or plain string
@@ -309,26 +335,44 @@ def _select_one_per_host(
 
 async def _fetch_with_deadline(
     hits: list[SearchResult],
-    fetch: t.Callable[[SearchResult], t.Awaitable[tuple[str, str, str]]],
+    fetch: t.Callable[[SearchResult], t.Awaitable[FetchOutcome]],
     extract: t.Callable[[str, str, str, str, str | None], tuple[str, str]],
     per_url_s: float,
     deadline_s: float,
     results: int,
+    query: str | None = None,
+    on_fetched: t.Callable[[str], None] | None = None,
 ) -> list[tuple[SearchResult, EvidenceSource]]:
-    """Fetch pages concurrently with deadline, cancelling stragglers."""
+    """Fetch pages concurrently with deadline, cancelling stragglers.
+
+    `fetch` answers `(heading, summary, markdown)` or, when it knows, a fourth
+    item: the `Method` that got the page. `markdown` is the *page* (empty when
+    only the search snippet is left); `query` makes the extraction pick the
+    passage that answers the question instead of the top of the page.
+    """
     import asyncio
 
     async def fetch_one(hit: SearchResult, idx: int) -> EvidenceSource:
+        method = Method.SNIPPET
         try:
-            heading, summary, markdown = await asyncio.wait_for(
+            fetched = await asyncio.wait_for(
                 fetch(hit),
                 timeout=per_url_s,
             )
+            heading, summary, markdown = fetched[:3]
+            if len(fetched) > 3:
+                method = fetched[3]
+            elif markdown:
+                method = Method.LOCAL
         except TimeoutError:
             heading = hit.title or ""
             summary = ""
             markdown = hit.snippet or ""
-        except Exception:  # noqa: BLE001
+        except Exception:
+            # The router never raises, so whatever lands here is a bug in the
+            # wiring (a wrong argument list sat here unseen, and every answer was
+            # quietly built from search snippets). Say so instead of hiding it.
+            logger.warning("fetching %s failed unexpectedly", hit.url, exc_info=True)
             heading = hit.title or ""
             summary = ""
             markdown = hit.snippet or ""
@@ -340,12 +384,19 @@ async def _fetch_with_deadline(
                 heading or hit.title,
                 hit.url,
                 hit.title,
-                query=None,
+                query=query,
             )
             heading = h or heading
             summary = s or summary
         elif hit.snippet and not summary:
             summary = hit.snippet
+            method = Method.SNIPPET
+
+        if on_fetched is not None:
+            try:
+                on_fetched(normalize_host(hit.url))
+            except Exception:
+                logger.debug("progress callback failed", exc_info=True)
 
         return EvidenceSource(
             number=idx,
@@ -353,7 +404,7 @@ async def _fetch_with_deadline(
             domain=normalize_host(hit.url),
             title=hit.title or "",
             url=hit.url or "",
-            method=Method.LOCAL if markdown else Method.SNIPPET,
+            method=method,
             text=summary,
             snippet=hit.snippet or "",
         )

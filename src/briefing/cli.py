@@ -13,6 +13,7 @@ depend on the terminal. Plain Click's help is stable everywhere.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import typing as t
@@ -22,7 +23,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from briefing.ask import Answer, NoSearchResultsError
+from briefing.ask import Answer, FetchOutcome, NoSearchResultsError
 from briefing.briefing import DedupStore, FileAudioState, FileSessionSummary, Gate, TopicFilter
 from briefing.config import (
     Config,
@@ -145,6 +146,7 @@ async def _ask_implementation(
     no_api: bool = False,
     no_knowledge: bool = False,
     config: str | None = None,
+    on_progress: t.Callable[[str, str], None] | None = None,
 ) -> Answer:
     """Build collaborators and call ask.ask (the real implementation).
 
@@ -166,10 +168,22 @@ async def _ask_implementation(
     whitelist = _whitelist(loaded)
     router = _router(loaded, no_api, whitelist)
 
-    async def _fetch_hit(hit: SearchResult) -> tuple[str, str, str]:
-        """Fetch a single hit through the router."""
-        result = await router.fetch(hit.url, hit.snippet or "", hit.title or "", hit.source)
-        return result.heading, result.summary, hit.snippet or ""
+    async def _fetch_hit(hit: SearchResult) -> FetchOutcome:
+        """One search hit through the router, in the shape `ask.ask` wants.
+
+        `Router.fetch(url, snippet)` takes two arguments. This used to pass four
+        (title and source as well), which raised a `TypeError` that `ask` swallowed,
+        so every page "failed" and every answer was built from search snippets. It
+        also handed back the *snippet* as the markdown, so even a working fetch would
+        never have reached the page's own text.
+
+        `markdown` is the page when the fetch worked and empty when it did not, which
+        is what tells `ask` there is a page to extract the answer from. The `Method`
+        rides along so a page fetched through the API is not labelled LOCAL.
+        """
+        result = await router.fetch(hit.url, hit.snippet or "")
+        markdown = result.markdown if result.ok else ""
+        return result.heading, result.summary, markdown, result.method
 
     # Create a simple async wrapper for search
     async def _search_hits(q: str) -> list[SearchResult]:
@@ -227,6 +241,7 @@ async def _ask_implementation(
         knowledge_enabled=loaded.knowledge.enabled and not no_knowledge,
         knowledge_adapters=knowledge_adapters if knowledge_adapters else None,
         knowledge_config=loaded.knowledge,
+        on_progress=on_progress,
     )
 
 
@@ -258,19 +273,26 @@ def _ask(
     loaded = _load(config)
     _configure_logging(loaded, verbose)
 
+    progress = _AskProgress.maybe(json_out=json_out, plain=plain)
+    # Passed only when there is a display for it, so the call a test double of
+    # `_ASK` receives is exactly the one it always was.
+    extra: dict[str, t.Any] = {} if progress is None else {"on_progress": progress.update}
+
     try:
-        result: Answer = asyncio.run(
-            _ASK(
-                query=query,
-                pages=pages,
-                time=time,
-                news=news,
-                web=web,
-                no_api=no_api,
-                no_knowledge=no_knowledge,
-                config=config,
+        with progress if progress is not None else contextlib.nullcontext():
+            result: Answer = asyncio.run(
+                _ASK(
+                    query=query,
+                    pages=pages,
+                    time=time,
+                    news=news,
+                    web=web,
+                    no_api=no_api,
+                    no_knowledge=no_knowledge,
+                    config=config,
+                    **extra,
+                )
             )
-        )
     except NoSearchResultsError as exc:
         _fail(exc.message, exc.hint)
 
@@ -279,6 +301,55 @@ def _ask(
         typer.echo(json.dumps(_answer_as_json(result), indent=2))
     else:
         _render_answer(result, plain=plain)
+
+
+class _AskProgress:
+    """A live status line for `briefing ask`, on stderr so `--json` stays clean.
+
+    Only built on a real terminal and only when output is not `--plain`/`--json`:
+    a piped run gets no spinner characters in its logs, and `_ask` then does not
+    pass `on_progress` at all, so a test double for `_ASK` never sees the argument.
+    """
+
+    def __init__(self, console: Console) -> None:
+        self._console = console
+        self._status: t.Any = None
+        self._total = 0
+        self._done = 0
+
+    @classmethod
+    def maybe(cls, *, json_out: bool, plain: bool | None) -> _AskProgress | None:
+        if json_out or plain:
+            return None
+        console = Console(stderr=True)
+        return cls(console) if console.is_terminal else None
+
+    def __enter__(self) -> t.Self:
+        self._status = self._console.status("Searching the web…")
+        self._status.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        if self._status is not None:
+            self._status.stop()
+
+    def update(self, stage: str, detail: str = "") -> None:
+        """The `on_progress` callback: turn a stage into one line of status."""
+        if self._status is None:
+            return
+        if stage == "searched":
+            text = f"Found {detail} results"
+        elif stage == "fetch":
+            self._total, self._done = int(detail or 0), 0
+            text = f"Reading {detail} pages…"
+        elif stage == "fetched":
+            self._done += 1
+            text = f"Read {self._done}/{self._total} pages · {detail}"
+        elif stage == "model":
+            text = "Writing the answer…"
+        else:
+            text = "Searching the web…"
+        self._status.update(text)
 
 
 def _render_answer(answer: Answer, *, plain: bool | None = None) -> None:
