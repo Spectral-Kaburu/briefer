@@ -1,6 +1,6 @@
 # CLAUDE.md: Briefing project (autonomous build)
 
-You are building the `briefing` Python CLI described in `SPEC.md`, following `PLAN.md`. The owner is away for the day. **Work autonomously until PLAN.md has no unchecked, non-optional tasks.**
+You are building the `briefing` Python CLI described in `SPEC.md`, following `PLAN.md`.
 
 ## Read first, every session start
 1. `SPEC.md` (what to build; error-classification table in section 4 is the source of truth)
@@ -16,12 +16,6 @@ You are building the `briefing` Python CLI described in `SPEC.md`, following `PL
 6. Commit with a simple one-line message: `git add -A` then `git commit -m "T1.2: local firecrawl client"`. Do **not** use heredocs or `$(...)` in commit commands.
 7. Tick the task in `PLAN.md` (`- [x]`) and append 1-3 lines to `PROGRESS.md`.
 
-## Never ask the user anything
-- Decide, then record the decision and reason in `DECISIONS.md`.
-- Skills that want to ask questions or offer choices (brainstorming, finishing-a-development-branch, etc.): **skip the question**, choose the sensible default, log it. Never open a PR, merge, or push.
-- If a task is blocked after 3 honest attempts: write the reason in `BLOCKED.md`, leave the box unchecked, and move to the next independent task.
-- Only when every remaining task is blocked: create an empty file `STOP_OK` at the repo root and finish with a short summary.
-
 ## Permissions: do not trip over them
 - The session runs with an allowlist. If a command is denied: **do not retry variants or work around it**. Append `command + why you needed it` to `DENIED.md` and continue with another approach or task.
 - Prefer dedicated tools (Read, Edit, Write, Glob, Grep) over shell equivalents.
@@ -30,7 +24,7 @@ You are building the `briefing` Python CLI described in `SPEC.md`, following `PL
 - Never edit `.claude/settings*.json` or `.claude/hooks/`.
 
 ## Hard rules
-- No `git push`, no remotes, no `sudo`, no docker lifecycle commands (the owner runs Docker). Read-only `docker ps` / `docker compose logs` are fine.
+- No `git push`, no remotes, no `sudo`, no docker lifecycle commands (the owner runs Docker).
 - **Never call the real Firecrawl API or Gemini in development or tests.** Tests use `respx` mocks and tmp dirs. Do not read real config/secrets. The owner's keys are intentionally not in your environment.
 - Live checks against the local Firecrawl (`curl -s http://localhost:3002/...`) and the live DDG test are allowed but must be marked `@pytest.mark.live` and skipped unless `BRIEFING_LIVE=1`. If local Firecrawl isn't up, skip them and note it in `PROGRESS.md`.
 - Never run `voice-tts`. Delivery code uses an injectable runner and a dry-run mode; real audio is tested by the owner afterwards.

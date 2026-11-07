@@ -634,9 +634,7 @@ def test_preferred_site_normalizes_domain_via_from_config() -> None:
     """Domain is normalized when built from config: lowercased, www. stripped."""
     from briefing.config import PreferredSource
 
-    config_source = PreferredSource(
-        domain="https://WWW.Python.org/articles", topics=("python",)
-    )
+    config_source = PreferredSource(domain="https://WWW.Python.org/articles", topics=("python",))
     site = PreferredSite.from_config(config_source)
     assert site.domain == "python.org"
 
@@ -646,7 +644,9 @@ def test_preferred_site_from_config() -> None:
     from briefing.config import PreferredSource
 
     config_source = PreferredSource(
-        domain="https://WWW.Python.org/articles", topics=["Python", " Programming "], pinned_url="https://python.org/"
+        domain="https://WWW.Python.org/articles",
+        topics=["Python", " Programming "],
+        pinned_url="https://python.org/",
     )
     site = PreferredSite.from_config(config_source)
     assert site.domain == "python.org"
@@ -665,7 +665,11 @@ def test_preferred_site_searchable_property() -> None:
 
 def test_pinned_url_is_added_to_results() -> None:
     """A pinned URL is added as a result when the site is relevant."""
-    site = PreferredSite(domain="python.org", topics=("python",), pinned_url="https://python.org/getting-started")
+    site = PreferredSite(
+        domain="python.org",
+        topics=("python",),
+        pinned_url="https://python.org/getting-started",
+    )
 
     fake = FakeDDGSWithPreferred(news=[], text=[])
     preferred = [site]
@@ -706,9 +710,24 @@ def test_site_search_is_performed_for_searchable_sites() -> None:
 def test_preferred_domains_promote_in_reranking() -> None:
     """Results from preferred domains are promoted when they match the query."""
     results = [
-        SearchResult(title="Python basics", url="https://python.org/basics", snippet="Intro to Python", origin="text"),
-        SearchResult(title="Flood in Kenya", url="https://news.com/flood", snippet="Rain in Kenya", origin="text"),
-        SearchResult(title="Another article", url="https://other.com/article", snippet="Random content", origin="text"),
+        SearchResult(
+            title="Python basics",
+            url="https://python.org/basics",
+            snippet="Intro to Python",
+            origin="text",
+        ),
+        SearchResult(
+            title="Flood in Kenya",
+            url="https://news.com/flood",
+            snippet="Rain in Kenya",
+            origin="text",
+        ),
+        SearchResult(
+            title="Another article",
+            url="https://other.com/article",
+            snippet="Random content",
+            origin="text",
+        ),
     ]
 
     ranked = _rerank_results(results, "python programming", preferred_domains=["python.org"])
@@ -722,9 +741,24 @@ def test_pinned_results_promote_when_in_preferred_domains() -> None:
     from briefing.search import _rerank_results
 
     results = [
-        SearchResult(title="Regular result", url="https://example.com/page", snippet="Some text", origin="text"),
-        SearchResult(title="Pinned article", url="https://python.org/pinned", snippet="Important content", origin="pinned"),
-        SearchResult(title="Another regular", url="https://other.com/page", snippet="More text", origin="text"),
+        SearchResult(
+            title="Regular result",
+            url="https://example.com/page",
+            snippet="Some text",
+            origin="text",
+        ),
+        SearchResult(
+            title="Pinned article",
+            url="https://python.org/pinned",
+            snippet="Important content",
+            origin="pinned",
+        ),
+        SearchResult(
+            title="Another regular",
+            url="https://other.com/page",
+            snippet="More text",
+            origin="text",
+        ),
     ]
 
     ranked = _rerank_results(results, "python programming", preferred_domains=["python.org"])

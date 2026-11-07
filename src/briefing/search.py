@@ -493,9 +493,7 @@ class Searcher:
             return _rerank_results(backup_results, query, [site.domain for site in relevant])
         return results
 
-    async def _preferred_hits(
-        self, query: str, sites: list[PreferredSite]
-    ) -> list[SearchResult]:
+    async def _preferred_hits(self, query: str, sites: list[PreferredSite]) -> list[SearchResult]:
         """Extra `site:` hits for sites whose topics the query matches."""
         results: list[SearchResult] = []
         for site in sites:
