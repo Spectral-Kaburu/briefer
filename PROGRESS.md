@@ -2567,3 +2567,25 @@ All defects verified as fixed:
 
 `make check` passes with 769 passed, 9 skipped.
 
+### Phase 13 — Progress Tracking Enhancement
+
+**Status:** Completed
+
+- **T13.5**: Added live display progress tracking to `briefing ask` mode:
+  - `FetchOutcome` type alias with optional `Method` return value
+  - `emit()` function for safe progress callback invocation
+  - `on_progress` callback parameter throughout the ask pipeline
+  - `_AskProgress` class with Rich status spinner integration
+  - Progress stages: "search", "searched", "fetch", "fetched", "model"
+
+- **T13**: Preferred sources feature integrated:
+  - BM25-style re-ranking with domain promotion
+  - `site:` search support in `search.py`
+  - `PreferredSite` NamedTuple for runtime domain/topic matching
+
+**Verification**: 779 non-live tests pass. Live test `test_live_realworld.py` is skipped without `GEMINI_API_KEY`.
+
+### Live Test Notes
+
+The live test `test_live_realworld.py` tests search relevance for "mach band effects in computer graphics". Without the owner's GEMINI_API_KEY and with current DDG search behavior returning irrelevant results (machine "Mach" instead of visual effects "Mach bands"), the test fails with D10 defects. This is expected - the owner should run with their API keys to verify real-world search quality.
+
