@@ -263,6 +263,98 @@ def test_synth_warns_when_gemini_key_missing(monkeypatch: t.Any) -> None:
     assert "1 found" in result.stdout
 
 
+# --- LLM provider selection (preferred_provider) ---------------------------
+
+
+def test_selected_llm_prefers_openai_when_both_keys_present(
+    monkeypatch: t.Any,
+) -> None:
+    """When both keys are present and preferred_provider is empty, OpenAI is selected."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test")
+    monkeypatch.delenv("BRIEFING_CONFIG", raising=False)
+
+    from briefing.cli import _selected_llm
+    from briefing.config import load_config
+
+    loaded = load_config()
+    provider, name = _selected_llm(loaded)
+    assert name == "openai"
+    assert provider is not None
+    assert name == "openai"
+
+
+def test_selected_llm_respects_gemini_when_preferred_configured(
+    monkeypatch: t.Any,
+    tmp_path: t.Any,
+) -> None:
+    """When preferred_provider is 'gemini', Gemini is selected even with both keys."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test")
+
+    path = tmp_path / "briefing.yaml"
+    path.write_text("briefing:\n  preferred_provider: gemini\n", encoding="utf-8")
+
+    from briefing.cli import _selected_llm
+    from briefing.config import load_config
+
+    loaded = load_config(path)
+    provider, name = _selected_llm(loaded)
+    assert name == "gemini"
+    assert provider is not None
+
+
+def test_selected_llm_uses_openai_when_only_openai_key_available(
+    monkeypatch: t.Any,
+) -> None:
+    """When only OpenAI key is present, OpenAI is selected."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("BRIEFING_CONFIG", raising=False)
+
+    from briefing.cli import _selected_llm
+    from briefing.config import load_config
+
+    loaded = load_config()
+    provider, name = _selected_llm(loaded)
+    assert name == "openai"
+    assert provider is not None
+
+
+def test_selected_llm_uses_gemini_when_only_gemini_key_available(
+    monkeypatch: t.Any,
+) -> None:
+    """When only Gemini key is present, Gemini is selected."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test")
+    monkeypatch.delenv("BRIEFING_CONFIG", raising=False)
+
+    from briefing.cli import _selected_llm
+    from briefing.config import load_config
+
+    loaded = load_config()
+    provider, name = _selected_llm(loaded)
+    assert name == "gemini"
+    assert provider is not None
+
+
+def test_selected_llm_returns_none_when_no_keys_available(
+    monkeypatch: t.Any,
+) -> None:
+    """When no keys are present, (None, None) is returned."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("BRIEFING_CONFIG", raising=False)
+
+    from briefing.cli import _selected_llm
+    from briefing.config import load_config
+
+    loaded = load_config()
+    provider, name = _selected_llm(loaded)
+    assert provider is None
+    assert name is None
+
+
 # --- the -r shorthand ----------------------------------------------------
 
 

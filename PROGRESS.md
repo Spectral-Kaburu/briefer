@@ -2634,7 +2634,22 @@ Implementation complete. Added OpenAI as an alternative LLM provider alongside G
    - Fixed `check` target to run `.venv/bin/pytest -m "not live"` to skip live tests
 
 **Verification:**
-- `make check` → 790 passed, 10 deselected, ruff clean
+- `make check` → 796 passed, 10 deselected, ruff clean
 - All OpenAI tests pass with mocked async client
 - Auto-selection logic verified via tests
+
+## T13.7 — 2026-11-07 · Provider selection tests
+
+Added comprehensive tests for the `_selected_llm()` helper function:
+
+1. **`tests/test_cli.py`** - Added 5 tests for provider auto-selection:
+   - `test_selected_llm_prefers_openai_when_both_keys_present` - verifies OpenAI is preferred by default when both keys exist
+   - `test_selected_llm_respects_gemini_when_preferred_configured` - verifies `preferred_provider: gemini` forces Gemini selection
+   - `test_selected_llm_uses_openai_when_only_openai_key_available` - single key case
+   - `test_selected_llm_uses_gemini_when_only_gemini_key_available` - fallback case
+   - `test_selected_llm_returns_none_when_no_keys_available` - no keys case
+
+These tests verify the `preferred_provider` config option works as requested, allowing users with both API keys to explicitly choose which provider to prefer.
+
+`make check` → 796 passed, 10 deselected, ruff clean.
 
