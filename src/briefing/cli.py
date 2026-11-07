@@ -88,8 +88,8 @@ def _selected_llm(loaded: Config) -> tuple[t.Any | None, str | None]:
     """Select the LLM provider that has a valid key.
 
     Returns (provider, provider_name) or (None, None) if no key is available.
-    Priority: OpenAI config first (if key exists), then Gemini (if key exists).
-    This allows automatic fallback based on which provider has credentials available.
+    Priority respects config.preferred_provider when both keys are present.
+    If preferred_provider is empty, defaults to OpenAI (if key exists), then Gemini.
 
     The caller decides what to do when no key is found (fallback behavior).
     """
@@ -98,6 +98,26 @@ def _selected_llm(loaded: Config) -> tuple[t.Any | None, str | None]:
     openai_key = resolve_openai_key(loaded, os.environ)
     gemini_key = resolve_gemini_key(loaded, os.environ)
 
+    # Check preferred provider setting
+    preferred = (
+        loaded.briefing.preferred_provider.lower() if loaded.briefing.preferred_provider else ""
+    )
+
+    # Both keys available - respect preferred_provider or default to openai
+    if openai_key and gemini_key:
+        if preferred == "gemini":
+            return (Gemini(), "gemini")
+        # Default: prefer openai when both keys present
+        return (
+            OpenAI(
+                model=loaded.briefing.openai.model,
+                api_key_env=loaded.briefing.openai.api_key_env,
+                base_url=loaded.briefing.openai.base_url,
+            ),
+            "openai",
+        )
+
+    # Only one key available
     if openai_key:
         return (
             OpenAI(

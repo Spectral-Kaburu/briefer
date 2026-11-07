@@ -137,6 +137,9 @@ class BriefingConfig(BaseModel):
     user_name: str = ""
     #: Who is speaking. Never used in the greeting.
     name: str = "Aether"
+    #: Preferred LLM provider when both have valid keys (gemini, openai, or "" for auto).
+    #: Auto means pick OpenAI if key present, else Gemini.
+    preferred_provider: str = ""
     #: Gemini LLM configuration for --llm and --synth modes (T9.4).
     gemini: GeminiConfig = GeminiConfig()
     #: OpenAI-compatible LLM configuration (OpenAI, NVIDIA NIM, etc.).

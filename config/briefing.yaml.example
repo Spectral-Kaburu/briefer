@@ -74,6 +74,10 @@ briefing:
   user_name: ""
   # Who the briefing is from, used by the synthesis prompt only.
   name: Aether
+  # Preferred LLM provider when both have valid keys (gemini, openai, or empty for auto).
+  # When both keys are present, this determines which provider to use.
+  # Empty means OpenAI is preferred (the default behavior). Set to "gemini" to prefer it.
+  preferred_provider: ""
   # Gemini LLM settings (T9.4): for --llm and --synth modes.
   gemini:
     # Environment variable holding the Gemini API key.

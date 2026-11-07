@@ -43,10 +43,20 @@ def test_defaults_match_spec_sketch() -> None:
     assert cfg.timeouts.per_url_s == 30.0
     assert cfg.timeouts.transient_backoff_s == 0.5
     assert cfg.firecrawl.api.timeout_s == 30.0
-    # OpenAI config defaults
+    # LLM config defaults
+    assert cfg.briefing.preferred_provider == ""  # auto-select when both keys present
     assert cfg.briefing.openai.base_url == "https://api.openai.com/v1"
     assert cfg.briefing.openai.api_key_env == "OPENAI_API_KEY"
     assert cfg.briefing.openai.model == "gpt-4o-mini"
+    assert cfg.briefing.gemini.model == "gemini-2.5-flash"
+
+
+def test_preferred_provider_can_be_configured(tmp_path: t.Any) -> None:
+    """Test that preferred_provider can be set in config."""
+    path = tmp_path / "briefing.yaml"
+    path.write_text("briefing:\n  preferred_provider: gemini\n", encoding="utf-8")
+    cfg = load_config(path)
+    assert cfg.briefing.preferred_provider == "gemini"
 
 
 # --- overrides --------------------------------------------------------------
