@@ -2653,3 +2653,23 @@ These tests verify the `preferred_provider` config option works as requested, al
 
 `make check` → 796 passed, 10 deselected, ruff clean.
 
+## T13.8 — 2026-11-07 · Restore CLI functions and update messages for OpenAI provider support
+
+Fixed issues discovered after ruff formatting corrupted `cli.py` and `ask.py`:
+
+1. **Restored missing `_AskProgress` class** - Live status line for `briefing ask`, showing progress while searching/fetching
+2. **Restored `_render_answer` function** - Renders an Answer as an answer panel followed by source cards
+3. **Restored `_AnswerResult` class** - Adapter that makes Answer sources compatible with the card() UI
+4. **Restored `_answer_as_json` function** - Converts an Answer to a JSON-serializable dict
+
+5. **Updated LLM messages** - Changed "No Gemini API key found" to "No LLM API key found" to reflect support for both OpenAI and Gemini
+6. **Updated `--llm` help text** - Now reads "Abstractive summaries via LLM (OpenAI or Gemini), instead of extractive."
+7. **Updated `status` command** - Now shows OpenAI key status alongside Gemini key status
+8. **Updated `show_config` command** - Now displays OpenAI configuration alongside Gemini
+
+9. **Fixed `_render_passages` in ask.py** - Added the "Sources disagree on some points" message for multiple sources
+
+10. **Updated tests** - Fixed `test_llm_warns_when_gemini_key_missing` → `test_llm_warns_when_no_llm_key_missing` to match new message format
+
+All changes verified with `make check` → 796 passed, 10 deselected, ruff clean.
+
