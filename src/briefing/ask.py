@@ -478,14 +478,11 @@ def _render_passages(sources: list[EvidenceSource]) -> str:
     for s in sources:
         paragraphs.append(f"[{s.number}] {s.title}\n{s.text}")
 
-    if len(paragraphs) > 1:
-        # Only mention disagreement when there are multiple sources
-        return (
-            "\n\n".join(paragraphs) + "\n\nSources disagree on some points; see above for context."
-        )
-
+    # No claim about agreement either way: nothing here compares the sources, and
+    # saying "they disagree" without checking would be a guess. The model prompt is
+    # what asks for disagreements to be called out.
     if paragraphs:
-        return paragraphs[0]
+        return "\n\n".join(paragraphs)
 
     return "No sources available to answer the query."
 

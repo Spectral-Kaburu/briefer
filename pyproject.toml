@@ -23,6 +23,7 @@ dependencies = [
 # with it absent.
 llm = [
     "google-genai",
+    "openai",
 ]
 dev = [
     "pytest",

@@ -46,13 +46,13 @@ from briefing.deliver import DeliveryError, SubprocessRunner, deliver
 from briefing.extract import Extracted, extract
 from briefing.fetch.api import ApiFirecrawl, usage_today
 from briefing.fetch.local import FirecrawlSearch, LocalFirecrawl
-from briefing.fetch.router import Method, Router
+from briefing.fetch.router import Router
 from briefing.log import configure as configure_logging
 from briefing.log import get_logger
 from briefing.pipeline import Pipeline, Report
 from briefing.search import PreferredSite, Searcher, SearchResult
 from briefing.synth import Gemini, ModelResult, OpenAI, ResearchSynth, Speaker
-from briefing.ui import UI, answer, card
+from briefing.ui import UI, AskProgress, answer, render_answer
 from briefing.whitelist import Whitelist, WhitelistEntry, normalize_host
 
 
@@ -320,7 +320,7 @@ def _ask(
     """Ask a question and get an answer with numbered sources."""
     _begin(config, verbose, news=news, web=web)
 
-    progress = _AskProgress.maybe(json_out=json_out, plain=plain)
+    progress = AskProgress.maybe(json_out=json_out, plain=plain)
     # Passed only when there is a display for it, so the call a test double of
     # `_ASK` receives is exactly the one it always was.
     extra: dict[str, t.Any] = {} if progress is None else {"on_progress": progress.update}
@@ -345,239 +345,9 @@ def _ask(
 
     # Render the output
     if json_out:
-        typer.echo(json.dumps(_answer_as_json(result), indent=2))
+        typer.echo(json.dumps(result.as_dict(), indent=2))
     else:
-        _render_answer(result, plain=plain)
-
-
-class _AskProgress:
-    """A live status line for `briefing ask`, on stderr so `--json` stays clean.
-
-    Only built on a real terminal and only when output is not `--plain`/`--json`:
-    a piped run gets no spinner characters in its logs, and `_ask` then does not
-    pass `on_progress` at all, so a test double for `_ASK` never sees the argument.
-    """
-
-    def __init__(self, console: Console) -> None:
-        self._console = console
-        self._status: t.Any = None
-        self._total = 0
-        self._done = 0
-
-    @classmethod
-    def maybe(cls, *, json_out: bool, plain: bool | None) -> _AskProgress | None:
-        if json_out or plain:
-            return None
-        console = Console(stderr=True)
-        return cls(console) if console.is_terminal else None
-
-    def __enter__(self) -> t.Self:
-        self._status = self._console.status("Searching the web…")
-        self._status.start()
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        if self._status is not None:
-            self._status.stop()
-
-    def update(self, stage: str, detail: str = "") -> None:
-        """The `on_progress` callback: turn a stage into one line of status."""
-        if self._status is None:
-            return
-        if stage == "searched":
-            text = f"Found {detail} results"
-        elif stage == "fetch":
-            self._total, self._done = int(detail or 0), 0
-            text = f"Reading {detail} pages…"
-        elif stage == "fetched":
-            self._done += 1
-            text = f"Read {self._done}/{self._total} pages · {detail}"
-        elif stage == "model":
-            text = "Writing the answer…"
-        else:
-            text = "Searching the web…"
-        self._status.update(text)
-
-
-def _render_answer(answer: Answer, *, plain: bool | None = None) -> None:
-    """Render an Answer as an answer panel followed by source cards (like research).
-
-    The output is:
-    1. Answer panel (the text field, possibly from model or passages)
-    2. Source cards (domain, title, URL, method badge) - only sources with text
-    3. Footer with timings and warnings
-    """
-    from rich import box
-    from rich.panel import Panel
-    from rich.text import Text
-
-    console = Console(stderr=(plain is True), width=80) if plain else Console(width=80)
-    if plain:
-        console.no_color = True
-
-    # 1. Answer panel
-    answer_panel = Panel(
-        Text(answer.text),
-        title="Answer",
-        box=box.SIMPLE if plain else box.ROUNDED,
-        expand=False,
-        highlight=bool(not plain),
-    )
-    console.print(answer_panel)
-
-    # 2. Source cards - using the same UI as research mode
-    # Filter out sources with no preview text (links with no previews are irrelevant)
-    # Tuple: (num, title, url, domain, method, text, license, author, snippet)
-    sources_with_text = [
-        (num, title, url, domain, method, text, license, author, snippet)
-        for num, title, url, domain, method, text, license, author, snippet in answer.sources
-        if text  # Exclude sources with empty text
-    ]
-
-    if sources_with_text:
-        console.print()
-        for rank, (num, title, url, domain, method, text, license, author, snippet) in enumerate(
-            sources_with_text, start=1
-        ):
-            # Build a Result-like object for the card renderer
-            method_enum = Method[method] if isinstance(method, str) else method
-            result = _AnswerResult(
-                rank=rank,
-                title=title,
-                url=url or "",
-                domain=domain,
-                method=method_enum,
-                heading=title,
-                summary=text,
-                ok=True,
-                age="",
-                snippet=text,
-                source="",
-                warning=None,
-                license=license,
-                author=author,
-            )
-            console.print(card(result, plain=plain))
-
-    # 3. Footer with timings and warnings
-    footer_parts = []
-
-    # Source counts by method (count all sources, including those without text)
-    # Tuple: (num, title, url, domain, method, text, license, author, snippet)
-    local_count = sum(1 for s in answer.sources if s[4] == "LOCAL")
-    api_count = sum(1 for s in answer.sources if s[4] == "API")
-    snippet_count = sum(1 for s in answer.sources if s[4] == "SNIPPET")
-    wiki_count = sum(1 for s in answer.sources if s[4] == "WIKI")
-    so_count = sum(1 for s in answer.sources if s[4] == "SO")
-    ddga_count = sum(1 for s in answer.sources if s[4] == "DDGA")
-
-    if local_count or api_count or snippet_count:
-        counts_parts = []
-        if local_count:
-            counts_parts.append(f"{local_count} local")
-        if api_count:
-            counts_parts.append(f"{api_count} API")
-        if snippet_count:
-            counts_parts.append(f"{snippet_count} snippet")
-        if wiki_count:
-            counts_parts.append(f"{wiki_count} wiki")
-        if so_count:
-            counts_parts.append(f"{so_count} so")
-        if ddga_count:
-            counts_parts.append(f"{ddga_count} ddga")
-        footer_parts.append(" · ".join(counts_parts))
-
-    if answer.used_llm:
-        method_desc = "LLM"
-    else:
-        method_desc = "passages"
-    footer_parts.append(f"{len(answer.sources)} sources ({method_desc})")
-
-    if answer.timings:
-        timing_parts = []
-        if "search" in answer.timings:
-            timing_parts.append(f"search: {answer.timings['search']:.1f}s")
-        if "fetch" in answer.timings:
-            timing_parts.append(f"fetch: {answer.timings['fetch']:.1f}s")
-        if "model" in answer.timings:
-            timing_parts.append(f"model: {answer.timings['model']:.1f}s")
-        if timing_parts:
-            footer_parts.append(" · " + " · ".join(timing_parts))
-
-    if answer.warnings:
-        footer_parts.append(" · " + "; ".join(answer.warnings))
-
-    if footer_parts:
-        footer_panel = Panel(
-            Text(" · ".join(footer_parts), "dim"),
-            box=box.SIMPLE,
-            expand=False,
-        )
-        console.print(footer_panel)
-
-
-class _AnswerResult:
-    """Adapter that makes Answer sources compatible with the card() UI.
-
-    This is a simple dataclass that mimics the Result structure expected by ui.card(),
-    allowing us to reuse the research card rendering code for ask mode.
-    """
-
-    def __init__(
-        self,
-        rank: int,
-        title: str,
-        url: str,
-        domain: str,
-        method: Method,
-        heading: str,
-        summary: str,
-        ok: bool,
-        age: str,
-        snippet: str,
-        source: str,
-        warning: str | None,
-        license: str = "",
-        author: str = "",
-    ) -> None:
-        self.rank = rank
-        self.title = title
-        self.url = url
-        self.domain = domain
-        self.method = method
-        self.heading = heading
-        self.summary = summary
-        self.ok = ok
-        self.age = age
-        self.snippet = snippet
-        self.source = source
-        self.warning = warning or ""
-        self.license = license
-        self.author = author
-
-
-def _answer_as_json(answer: Answer) -> dict[str, t.Any]:
-    """Convert an Answer to a JSON-serializable dict."""
-    return {
-        "question": answer.question,
-        "answer": answer.text,
-        "used_llm": answer.used_llm,
-        "sources": [
-            {
-                "number": s[0],
-                "title": s[1],
-                "url": s[2],
-                "domain": s[3],
-                "method": s[4],
-                "passages": s[5],
-                "license": s[6],
-                "author": s[7],
-            }
-            for s in answer.sources
-        ],
-        "timings": answer.timings,
-        "warnings": answer.warnings,
-    }
+        render_answer(result, plain=plain)
 
 
 def _STATE_DIR() -> Path:

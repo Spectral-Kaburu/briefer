@@ -559,8 +559,8 @@ def test_render_passages_single_source_no_disagreement() -> None:
     assert "Test content" in result
 
 
-def test_render_passages_multiple_sources_shows_disagreement() -> None:
-    """Multiple sources should mention disagreement."""
+def test_render_passages_multiple_sources_makes_no_disagreement_claim() -> None:
+    """Passages are listed as they are: nothing compared them, so nothing claims they differ."""
     from briefing.ask import EvidenceSource, _render_passages
 
     sources = [
@@ -587,7 +587,7 @@ def test_render_passages_multiple_sources_shows_disagreement() -> None:
     ]
 
     result = _render_passages(sources)
-    assert "Sources disagree" in result
+    assert "disagree" not in result.lower()
     assert "[1] Article A" in result
     assert "[2] Article B" in result
 
