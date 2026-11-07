@@ -50,6 +50,17 @@ _BOILERPLATE_LINE_MARKERS = (
     "related articles",
     "most read",
     "also read",
+    # Consent and ad-blocker notices that were being shown as the page's snippet
+    # (planetf1's "Using Brave, Firefox strict mode, VPN or privacy extensions?
+    # These may block ads automatically." and f1dailybrief's consent banner).
+    # Long and specific enough that dropping the whole line costs no prose.
+    "block ads",
+    "ad blocker",
+    "adblock",
+    "affiliate disclosure",
+    "optional measurement",
+    "accept optional",
+    "decline optional",
 )
 
 # Chrome that shows up as a *prefix* on a line whose tail is the article, and is

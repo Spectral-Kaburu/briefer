@@ -20,8 +20,10 @@ from ddgs.exceptions import RatelimitException, TimeoutException
 from briefing.fetch.local import FirecrawlSearch
 from briefing.search import (
     _NO_DATE,
+    PreferredSite,
     Searcher,
     SearchResult,
+    _rerank_results,
     detect_mode,
     parse_age,
     widen_timelimit,
@@ -578,3 +580,164 @@ def test_a_rate_limited_ddgs_is_really_rescued_by_local_firecrawl() -> None:
     assert [r.url for r in results] == [SEARCH_HIT["url"]]
     assert results[0].snippet == SEARCH_HIT["description"]
     assert results[0].origin == "search"
+
+
+# --- Preferred sources (Phase 13) ------------------------------------------------
+
+
+class FakeDDGSWithPreferred(FakeDDGS):
+    """Fake DDGS that supports `site:` queries for preferred sources."""
+
+    def text(self, query: str, **kwargs: t.Any) -> list[dict[str, t.Any]]:
+        if "site:" in query:
+            # Extract domain from query like "query site:example.com"
+            site = query.split("site:")[-1].strip()
+            site_hits = [
+                {
+                    "title": f"Site result for {site}",
+                    "url": f"https://{site}/site-result",
+                    "body": f"Content from {site}",
+                }
+            ]
+            return site_hits[: kwargs.get("max_results", 3)]
+        return super().text(query, **kwargs)
+
+    def __enter__(self) -> t.Self:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        return None
+
+
+def test_preferred_source_is_relevant_when_topic_matches() -> None:
+    """A site with matching topics is relevant to the query."""
+    site = PreferredSite(domain="example.com", topics=("python", "programming"))
+    assert site.is_relevant("What is Python programming language?")
+    assert site.is_relevant("How to learn Python for programming?")
+
+
+def test_preferred_source_is_not_relevant_when_topic_does_not_match() -> None:
+    """A site is not relevant when no topic is mentioned in the query."""
+    site = PreferredSite(domain="python.org", topics=("python", "programming"))
+    assert not site.is_relevant("latest flooding in kenya")
+    assert not site.is_relevant("news about the election")
+
+
+def test_preferred_source_with_no_topics_is_always_relevant() -> None:
+    """A site with no topics applies to every query, but only for ranking."""
+    site = PreferredSite(domain="example.com")
+    assert site.is_relevant("anything goes here")
+    assert site.is_relevant("latest flooding")
+
+
+def test_preferred_site_normalizes_domain_via_from_config() -> None:
+    """Domain is normalized when built from config: lowercased, www. stripped."""
+    from briefing.config import PreferredSource
+
+    config_source = PreferredSource(
+        domain="https://WWW.Python.org/articles", topics=("python",)
+    )
+    site = PreferredSite.from_config(config_source)
+    assert site.domain == "python.org"
+
+
+def test_preferred_site_from_config() -> None:
+    """PreferredSite is built from config.PreferredSource."""
+    from briefing.config import PreferredSource
+
+    config_source = PreferredSource(
+        domain="https://WWW.Python.org/articles", topics=["Python", " Programming "], pinned_url="https://python.org/"
+    )
+    site = PreferredSite.from_config(config_source)
+    assert site.domain == "python.org"
+    assert site.topics == ("python", "programming")
+    assert site.pinned_url == "https://python.org/"
+
+
+def test_preferred_site_searchable_property() -> None:
+    """Only sites with topics are searchable (earn extra site: hits)."""
+    with_topics = PreferredSite(domain="example.com", topics=("python",))
+    without_topics = PreferredSite(domain="example.com")
+
+    assert with_topics.searchable is True
+    assert without_topics.searchable is False
+
+
+def test_pinned_url_is_added_to_results() -> None:
+    """A pinned URL is added as a result when the site is relevant."""
+    site = PreferredSite(domain="python.org", topics=("python",), pinned_url="https://python.org/getting-started")
+
+    fake = FakeDDGSWithPreferred(news=[], text=[])
+    preferred = [site]
+    searcher = Searcher(
+        ddgs_factory=lambda: fake,
+        preferred=preferred,
+        preferred_extra=3,
+        backoff_s=0,
+    )
+
+    results = asyncio.run(searcher.search("python programming"))
+
+    # Should include the pinned URL result
+    assert any(r.origin == "pinned" for r in results)
+    assert any("python.org/getting-started" in r.url for r in results)
+
+
+def test_site_search_is_performed_for_searchable_sites() -> None:
+    """Extra site: search is done for sites with topics."""
+    site = PreferredSite(domain="python.org", topics=("python",), pinned_url="")
+    preferred = [site]
+
+    fake = FakeDDGSWithPreferred(news=[], text=[])
+    searcher = Searcher(
+        ddgs_factory=lambda: fake,
+        preferred=preferred,
+        preferred_extra=3,
+        backoff_s=0,
+    )
+
+    results = asyncio.run(searcher.search("python programming"))
+
+    # Should have results from the site: search
+    assert len(results) >= 1
+    assert "site-result" in results[0].url
+
+
+def test_preferred_domains_promote_in_reranking() -> None:
+    """Results from preferred domains are promoted when they match the query."""
+    results = [
+        SearchResult(title="Python basics", url="https://python.org/basics", snippet="Intro to Python", origin="text"),
+        SearchResult(title="Flood in Kenya", url="https://news.com/flood", snippet="Rain in Kenya", origin="text"),
+        SearchResult(title="Another article", url="https://other.com/article", snippet="Random content", origin="text"),
+    ]
+
+    ranked = _rerank_results(results, "python programming", preferred_domains=["python.org"])
+
+    # The python.org result should be first
+    assert ranked[0].url == "https://python.org/basics"
+
+
+def test_pinned_results_promote_when_in_preferred_domains() -> None:
+    """Pinned results from preferred domains are always promoted to the front."""
+    from briefing.search import _rerank_results
+
+    results = [
+        SearchResult(title="Regular result", url="https://example.com/page", snippet="Some text", origin="text"),
+        SearchResult(title="Pinned article", url="https://python.org/pinned", snippet="Important content", origin="pinned"),
+        SearchResult(title="Another regular", url="https://other.com/page", snippet="More text", origin="text"),
+    ]
+
+    ranked = _rerank_results(results, "python programming", preferred_domains=["python.org"])
+
+    # The pinned result from python.org should be first
+    assert ranked[0].origin == "pinned"
+    assert "python.org/pinned" in ranked[0].url
+
+
+def test_empty_preferred_sources_works() -> None:
+    """When no preferred sources are configured, search works normally."""
+    fake = FakeDDGS(news=[NEWS_HIT])
+    searcher = Searcher(ddgs_factory=lambda: fake, preferred=[], backoff_s=0)
+    results = asyncio.run(searcher.search("latest flooding"))
+    assert len(results) == 1
+    assert results[0].title == "Bank raises lending rate"

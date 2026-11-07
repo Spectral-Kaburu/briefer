@@ -41,7 +41,7 @@ from briefing.fetch.router import Method, Router
 from briefing.log import configure as configure_logging
 from briefing.log import get_logger
 from briefing.pipeline import Pipeline, Report
-from briefing.search import Searcher, SearchResult
+from briefing.search import PreferredSite, Searcher, SearchResult
 from briefing.synth import Gemini, ModelResult, ResearchSynth, Speaker
 from briefing.ui import UI, answer, card
 from briefing.whitelist import Whitelist, WhitelistEntry, normalize_host
@@ -117,15 +117,22 @@ _SUMMARIZER = _summarizer
 
 def _searcher_for_ask(loaded: Config, mode: str | None, no_api: bool) -> Searcher:
     """Create a Searcher for ask mode sharing the same configuration as research."""
-    return Searcher(
-        region=loaded.search.region,
-        max_results=loaded.search.results,
-        backup=FirecrawlSearch(
-            base_url=loaded.firecrawl.local.base_url,
-            timeout_s=loaded.firecrawl.local.timeout_s,
-        ),
-        mode=mode,
-    )
+    kwargs = _preferred_kwargs(loaded)
+    if no_api:
+        kwargs["backup"] = None
+    else:
+        kwargs.update(
+            {
+                "region": loaded.search.region,
+                "max_results": loaded.search.results,
+                "backup": FirecrawlSearch(
+                    base_url=loaded.firecrawl.local.base_url,
+                    timeout_s=loaded.firecrawl.local.timeout_s,
+                ),
+                "mode": mode,
+            }
+        )
+    return Searcher(**kwargs)
 
 
 async def _ask_implementation(
@@ -1022,6 +1029,23 @@ def _local_firecrawl(loaded: Config) -> LocalFirecrawl:
     )
 
 
+def _preferred_kwargs(loaded: Config) -> dict[str, t.Any]:
+    """Extract preferred sources configuration from the loaded config.
+
+    Returns a dict with `preferred` (list of PreferredSite), `preferred_extra`,
+    and `preferred_max_searches` for the Searcher constructor.
+    """
+    cfg = loaded.preferred_sources
+    if not cfg.enabled:
+        return {}
+    preferred = [PreferredSite.from_config(s) for s in cfg.sources]
+    return {
+        "preferred": preferred,
+        "preferred_extra": cfg.extra_results,
+        "preferred_max_searches": cfg.max_extra_searches,
+    }
+
+
 def _searcher(loaded: Config, mode: str | None) -> Searcher:
     # T8.2: the backup is `FirecrawlSearch`, not the scrape client — it POSTs to
     # `/v2/search`, honors `mode`, and never raises (a failed backup is the last
@@ -1036,6 +1060,7 @@ def _searcher(loaded: Config, mode: str | None) -> Searcher:
             timeout_s=loaded.firecrawl.local.timeout_s,
         ),
         mode=mode,
+        **_preferred_kwargs(loaded),
     )
 
 

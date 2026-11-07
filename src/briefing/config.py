@@ -183,6 +183,42 @@ class KnowledgeConfig(BaseModel):
     backoff: float | None = 60.0
 
 
+class PreferredSource(BaseModel):
+    """One site whose answers are favoured when a question fits it.
+
+    `topics` decide *when* the site applies: a query that mentions any of them
+    (whole words or phrases, case-insensitive) gets an extra `site:` search of
+    this domain and its results are promoted. With no topics the site applies to
+    every query, but only as a ranking boost (no extra searches), so a long
+    topic-less list cannot slow every run down.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    domain: str
+    topics: list[str] = []
+    #: A page that answers matching questions directly. It is added to the
+    #: results (and so fetched like any other) whenever a topic matches.
+    pinned_url: str = ""
+
+
+class PreferredSourcesConfig(BaseModel):
+    """Sites to prefer when they can answer the question.
+
+    This is separate from `whitelist`, which is the list of domains the cloud
+    API may fetch. Preferring a site never lets the API fetch it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    #: Results per `site:` search.
+    extra_results: int = 3
+    #: Cap on `site:` searches per query, so many matching sources stay quick.
+    max_extra_searches: int = 2
+    sources: list[PreferredSource] = []
+
+
 class Paths(BaseModel):
     """Every file the CLI owns, all under the state dir so a test moves them all
     at once by overriding it."""
@@ -205,6 +241,7 @@ class Config(BaseModel):
     search: SearchConfig = SearchConfig()
     firecrawl: FirecrawlConfig = FirecrawlConfig()
     whitelist: WhitelistConfig = WhitelistConfig()
+    preferred_sources: PreferredSourcesConfig = PreferredSourcesConfig()
     summary: SummaryConfig = SummaryConfig()
     blocklist_topics: list[str] = ["crypto", "bitcoin", "trading", "forex", "stocks"]
     dedup: DedupConfig = DedupConfig()
