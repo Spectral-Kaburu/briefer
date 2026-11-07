@@ -2589,3 +2589,52 @@ All defects verified as fixed:
 
 The live test `test_live_realworld.py` tests search relevance for "mach band effects in computer graphics". Without the owner's GEMINI_API_KEY and with current DDG search behavior returning irrelevant results (machine "Mach" instead of visual effects "Mach bands"), the test fails with D10 defects. This is expected - the owner should run with their API keys to verify real-world search quality.
 
+---
+
+## T13: OpenAI API as Alternative LLM Provider
+
+Implementation complete. Added OpenAI as an alternative LLM provider alongside Gemini.
+
+**What landed:**
+
+1. **`src/briefing/config.py`**:
+   - Added `OpenAIConfig` class with `base_url`, `api_key_env`, `model` fields
+   - Added `openai` field to `BriefingConfig` with defaults
+   - Added `resolve_openai_key()` function following the `resolve_gemini_key()` pattern
+
+2. **`src/briefing/synth.py`**:
+   - Added `OpenAI` class implementing the same `generate()` interface as `Gemini`
+   - Uses lazy import for `openai.AsyncOpenAI` (optional dependency)
+   - Supports configurable `base_url` for NVIDIA API endpoint
+   - Returns `ModelResult` with `text`, `finish_reason`, `usage` fields
+   - Exceptions propagate to caller (caught by `_generate()` helper)
+
+3. **`src/briefing/cli.py`**:
+   - Added `_selected_llm()` helper that auto-selects provider with valid API key
+   - Updated `_speaker()` to use auto-selected LLM
+   - Updated `_summarizer()` to use auto-selected LLM
+   - Updated `_ask_implementation()` to support auto-selection
+   - Fixed SIM210 ruff issue (line 409)
+
+4. **`config/briefing.yaml.example`**:
+   - Added `openai` section under `briefing` with comments for `base_url`, `api_key_env`, `model`
+
+5. **`tests/test_config.py`**:
+   - Added tests for `resolve_openai_key()` function
+   - Tests for default values and custom env var
+
+6. **`tests/test_synth.py`**:
+   - Added `MagicMock`/`AsyncMock` imports
+   - Added tests for `OpenAI.generate()` returning `ModelResult`
+   - Added tests for `OpenAI` accepting custom `base_url` for NVIDIA
+   - Added tests for `Speaker` working with OpenAI client
+   - Added tests for fallback when OpenAI client raises
+
+7. **`Makefile`**:
+   - Fixed `check` target to run `.venv/bin/pytest -m "not live"` to skip live tests
+
+**Verification:**
+- `make check` → 790 passed, 10 deselected, ruff clean
+- All OpenAI tests pass with mocked async client
+- Auto-selection logic verified via tests
+
