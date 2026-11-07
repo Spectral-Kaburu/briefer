@@ -31,6 +31,19 @@ _DEFAULT_WINDOW_HOURS = 24
 _WORD = re.compile(r"[a-z0-9]+")
 
 
+def _read_json_object(path: Path) -> dict[str, t.Any]:
+    """The JSON object in `path`, or {} when it is missing, unreadable or not an object.
+
+    Every file here is state the briefing must survive losing, so none of these
+    failures may raise.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def headline_hash(headline: str) -> str:
     """Stable digest of a headline.
 
@@ -46,10 +59,18 @@ def headline_hash(headline: str) -> str:
 def is_blocked_topic(topic: str, blocklist: t.Iterable[str]) -> bool:
     """True when `topic` names a blocked speculation topic.
 
-    Whole words only: "stock" blocks "stocks rally" but not "knowledge economy".
+    Whole words only: "stock" blocks "stock rally" but not "stocks rally" or
+    "knowledge economy". A multi-word entry blocks that exact phrase.
     """
-    words = set(_WORD.findall(topic.lower()))
-    return any(blocked.lower() in words for blocked in blocklist)
+    words = _WORD.findall(topic.lower())
+    for blocked in blocklist:
+        needle = _WORD.findall(blocked.lower())
+        # A phrase ("stock market") must appear as consecutive whole words.
+        if needle and any(
+            words[i : i + len(needle)] == needle for i in range(len(words) - len(needle) + 1)
+        ):
+            return True
+    return False
 
 
 class TopicFilter:
@@ -92,16 +113,7 @@ class DedupStore:
         A broken store must never stop the briefing from running, so every
         failure of this kind yields an empty one rather than an exception.
         """
-        try:
-            raw = self.path.read_text(encoding="utf-8")
-        except OSError:
-            return [], {}
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            return [], {}
-        if not isinstance(data, dict):
-            return [], {}
+        data = _read_json_object(self.path)
         raw_entries = data.get("entries")
         items = raw_entries if isinstance(raw_entries, list) else []
         entries: list[SeenHeadline] = []
@@ -218,12 +230,7 @@ class FileAudioState:
 
     async def speaking(self) -> bool:
         """True only when the file records a positive speaking state."""
-        try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return False
-        if not isinstance(data, dict):
-            return False
+        data = _read_json_object(self.path)
         return str(data.get("state", "")).strip().lower() == "speaking"
 
 
@@ -241,13 +248,7 @@ class FileSessionSummary:
 
     async def text(self) -> str:
         """The summary, or "" when there is none."""
-        try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return ""
-        if not isinstance(data, dict):
-            return ""
-        return str(data.get("summary", "")).strip()
+        return str(_read_json_object(self.path).get("summary", "")).strip()
 
 
 class Gate:

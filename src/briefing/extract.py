@@ -107,6 +107,58 @@ _BADGE = re.compile(r"^\d+\s+")
 # A space wedged before punctuation, which dropping a link element leaves behind.
 _PUNCT_SPACE = re.compile(r"\s+([,.;:!?])")
 
+# Words that say nothing about whether a heading matches a URL or search title.
+_STOP_WORDS = frozenset(
+    [
+        "the",
+        "a",
+        "an",
+        "of",
+        "in",
+        "on",
+        "for",
+        "to",
+        "and",
+        "or",
+        "with",
+        "by",
+        "at",
+        "from",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "as",
+        "it",
+        "its",
+        "this",
+        "that",
+        "these",
+        "those",
+        "but",
+        "not",
+        "no",
+        "just",
+        "only",
+        "also",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "must",
+    ]
+)
+
 # Bare URLs to drop from text (T9.1 D2)
 _BARE_URL = re.compile(r"https?://[^\s]+")
 
@@ -205,9 +257,6 @@ def clean_markdown(text: str) -> str:
         low = line.lower()
         if any(marker in low for marker in _BOILERPLATE_LINE_MARKERS):
             continue
-        # Skip lines that start with furniture prefixes
-        if any(low.startswith(prefix) for prefix in _BOILERPLATE_PREFIXES):
-            continue
         lines.append(line)
 
     return "\n\n".join(lines)
@@ -252,21 +301,17 @@ def extract(
                         break
 
             if selected_texts:
-                summary = " ".join(selected_texts)
-                # Apply cap as defense in depth (same 320 char cap from T9.1)
-                if len(summary) > _SUMMARY_CAP_CHARS:
-                    cut = summary[:_SUMMARY_CAP_CHARS].rsplit(None, 1)[0]
-                    summary = cut + "..."
-                return Extracted(heading=heading, summary=summary)
+                return Extracted(heading=heading, summary=_cap(" ".join(selected_texts)))
 
     # Default extractive summarisation (without query)
-    summary = _summarise(cleaned, sentences)
-    # Apply cap as defense in depth
-    if len(summary) > _SUMMARY_CAP_CHARS:
-        # Cut at word boundary with ellipsis
-        cut = summary[:_SUMMARY_CAP_CHARS].rsplit(None, 1)[0]
-        summary = cut + "..."
-    return Extracted(heading=heading, summary=summary)
+    return Extracted(heading=heading, summary=_cap(_summarise(cleaned, sentences)))
+
+
+def _cap(summary: str) -> str:
+    """Defence in depth (T9.1): cut at a word boundary, with an ellipsis."""
+    if len(summary) <= _SUMMARY_CAP_CHARS:
+        return summary
+    return summary[:_SUMMARY_CAP_CHARS].rsplit(None, 1)[0] + "..."
 
 
 def _first_h1(markdown: str) -> str:
@@ -290,7 +335,7 @@ def _select_heading(
     1. Candidates WITH overlap are considered relevant
     2. Among relevant candidates, pick the best-scored one
     3. Priority order: metadata_title > first_h1 > search_title
-    4. If no candidate has overlap, fall back to empty string
+    4. If no candidate has overlap, the one with the highest raw score wins
 
     Returns (heading, source_name) tuple for debug logging.
     """
@@ -357,8 +402,6 @@ def _extract_url_path(url: str) -> str:
         return ""
     # Remove scheme and domain, get path
     # e.g., https://python.org/downloads/3.11/ -> "downloads 3 11"
-    import re
-
     # Strip protocol and domain
     path = re.sub(r"^https?://[^/]+/", "", url)
     # Remove trailing slash and file extensions
@@ -380,59 +423,9 @@ def _heading_overlap_score(heading: str, url_path: str, search_title: str) -> in
     if not heading:
         return 0
 
-    # Stop words to ignore
-    stop_words = {
-        "the",
-        "a",
-        "an",
-        "of",
-        "in",
-        "on",
-        "for",
-        "to",
-        "and",
-        "or",
-        "with",
-        "by",
-        "at",
-        "from",
-        "is",
-        "are",
-        "was",
-        "were",
-        "be",
-        "been",
-        "as",
-        "it",
-        "its",
-        "this",
-        "that",
-        "these",
-        "those",
-        "but",
-        "not",
-        "no",
-        "just",
-        "only",
-        "also",
-        "have",
-        "has",
-        "had",
-        "do",
-        "does",
-        "did",
-        "will",
-        "would",
-        "could",
-        "should",
-        "may",
-        "might",
-        "must",
-    }
-
     # Extract words from heading (lowercase, no punctuation)
     heading_words = set(re.findall(r"[a-zA-Z]+", heading.lower()))
-    heading_words -= stop_words
+    heading_words -= _STOP_WORDS
 
     # Score from URL path overlap
     url_words = set(url_path.split()) if url_path else set()
@@ -440,7 +433,7 @@ def _heading_overlap_score(heading: str, url_path: str, search_title: str) -> in
 
     # Score from search title overlap
     search_words = set(re.findall(r"[a-zA-Z]+", search_title.lower())) if search_title else set()
-    search_words -= stop_words
+    search_words -= _STOP_WORDS
     search_score = len(heading_words & search_words) * 10
 
     # Bonus for having any overlap at all
@@ -548,10 +541,7 @@ def _prose_lines(markdown: str) -> list[str]:
             continue
         if _is_nav_bar(line):
             continue
-        cleaned = line
-        if not cleaned:
-            continue
-        lines.append(cleaned)
+        lines.append(line)
     return lines
 
 
@@ -585,23 +575,6 @@ def _merge_fragments(sentences: list[str]) -> list[str]:
     return merged
 
 
-def _pick_sentences(sentences: list[str], count: int) -> list[str]:
-    """First `count` sentences, skipping an opener that is only a kicker.
-
-    A one-line teaser ("Some opening paragraph that is short.") carries no
-    substance, so when a longer sentence follows we spend the summary budget on
-    that instead. If the *only* sentences are short, they are used as-is.
-    """
-    if count <= 0:
-        return []
-    picked: list[str] = []
-    for sentence in sentences:
-        picked.append(sentence)
-        if len(picked) >= count:
-            break
-    return picked
-
-
 def _skip_kickers(sentences: list[str], count: int) -> list[str]:
     """Reorder so a short opener does not consume the budget when prose exists.
 
@@ -612,4 +585,4 @@ def _skip_kickers(sentences: list[str], count: int) -> list[str]:
     if not substantial:
         return sentences
     ordered = substantial + [s for s in sentences if len(s) < _MIN_SUBSTANCE_CHARS]
-    return _pick_sentences(ordered, count)
+    return ordered[: max(count, 0)]

@@ -236,14 +236,15 @@ def test_json_has_no_answer_field_without_synth(monkeypatch: t.Any) -> None:
     assert "answer" not in json.loads(result.stdout)
 
 
-def test_llm_warns_when_gemini_key_missing(monkeypatch: t.Any) -> None:
-    """T9.4: missing Gemini key produces a warning, not a crash."""
+def test_llm_warns_when_no_llm_key_missing(monkeypatch: t.Any) -> None:
+    """T9.4: missing LLM key produces a warning, not a crash."""
     _configure(_report(), monkeypatch)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     result = runner.invoke(app, ["research", "bank rate", "--llm"])
     assert result.exit_code == 0, result.stderr
-    assert "No Gemini API key found" in result.stderr
-    assert "Gemini API key" in result.stderr
+    assert "No LLM API key found" in result.stderr
+    assert "OPENAI_API_KEY or GEMINI_API_KEY" in result.stderr
     assert (
         "using extractive summary" in result.stderr.lower() or "fallback" in result.stderr.lower()
     )
@@ -251,14 +252,15 @@ def test_llm_warns_when_gemini_key_missing(monkeypatch: t.Any) -> None:
     assert "1 found" in result.stdout
 
 
-def test_synth_warns_when_gemini_key_missing(monkeypatch: t.Any) -> None:
-    """T9.4: missing Gemini key produces a warning, not a crash."""
+def test_synth_warns_when_no_llm_key_missing(monkeypatch: t.Any) -> None:
+    """T9.4: missing LLM key produces a warning, not a crash."""
     _configure(_report(), monkeypatch)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     result = runner.invoke(app, ["research", "bank rate", "--synth"])
     assert result.exit_code == 0, result.stderr
-    assert "No Gemini API key found" in result.stderr
-    assert "Gemini API key" in result.stderr
+    assert "No LLM API key found" in result.stderr
+    assert "OPENAI_API_KEY or GEMINI_API_KEY" in result.stderr
     # Still produces output (cards without synthesized answer)
     assert "1 found" in result.stdout
 

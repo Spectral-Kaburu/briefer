@@ -24,7 +24,14 @@ import typer
 from rich.console import Console
 
 from briefing.ask import Answer, FetchOutcome, NoSearchResultsError
-from briefing.briefing import DedupStore, FileAudioState, FileSessionSummary, Gate, TopicFilter
+from briefing.briefing import (
+    DedupStore,
+    FileAudioState,
+    FileSessionSummary,
+    Gate,
+    TopicFilter,
+    headline_hash,
+)
 from briefing.config import (
     Config,
     ConfigError,
@@ -93,8 +100,6 @@ def _selected_llm(loaded: Config) -> tuple[t.Any | None, str | None]:
 
     The caller decides what to do when no key is found (fallback behavior).
     """
-    import os
-
     openai_key = resolve_openai_key(loaded, os.environ)
     gemini_key = resolve_gemini_key(loaded, os.environ)
 
@@ -155,6 +160,23 @@ def _summarizer(loaded: Config) -> ResearchSynth:
     return ResearchSynth(llm)
 
 
+def _has_llm(loaded: Config) -> bool:
+    """True when any provider has a key. Checks keys only, builds no client."""
+    return bool(resolve_openai_key(loaded, os.environ) or resolve_gemini_key(loaded, os.environ))
+
+
+def _begin(config: str | None, verbose: bool, *, news: bool, web: bool) -> Config:
+    """What `research` and `ask` both do first: check the flags, load config, set up logs."""
+    if news and web:
+        _fail(
+            "--news and --web both set the search mode.",
+            "Pick one: drop --news, or drop --web.",
+        )
+    loaded = _load(config)
+    _configure_logging(loaded, verbose)
+    return loaded
+
+
 # The seams the tests patch by name, so a whole run's collaborator graph swaps
 # without touching a running event loop. Real code uses the real things.
 _PIPELINE = Pipeline
@@ -167,26 +189,6 @@ _SUMMARIZER = _summarizer
 
 # _ASK is the ask implementation that can be swapped by tests.
 # It accepts CLI parameters and returns an Answer.
-
-
-def _searcher_for_ask(loaded: Config, mode: str | None, no_api: bool) -> Searcher:
-    """Create a Searcher for ask mode sharing the same configuration as research."""
-    kwargs = _preferred_kwargs(loaded)
-    if no_api:
-        kwargs["backup"] = None
-    else:
-        kwargs.update(
-            {
-                "region": loaded.search.region,
-                "max_results": loaded.search.results,
-                "backup": FirecrawlSearch(
-                    base_url=loaded.firecrawl.local.base_url,
-                    timeout_s=loaded.firecrawl.local.timeout_s,
-                ),
-                "mode": mode,
-            }
-        )
-    return Searcher(**kwargs)
 
 
 async def _ask_implementation(
@@ -213,7 +215,7 @@ async def _ask_implementation(
     mode = _mode_for(news, web)
 
     # Create searcher
-    searcher = _searcher_for_ask(loaded, mode, no_api)
+    searcher = _searcher(loaded, mode)
     if time is not None:
         searcher.timelimit = _timelimit(time)
 
@@ -316,14 +318,7 @@ def _ask(
     verbose: bool = False,
 ) -> None:
     """Ask a question and get an answer with numbered sources."""
-    if news and web:
-        _fail(
-            "--news and --web both set the search mode.",
-            "Pick one: drop --news, or drop --web.",
-        )
-
-    loaded = _load(config)
-    _configure_logging(loaded, verbose)
+    _begin(config, verbose, news=news, web=web)
 
     progress = _AskProgress.maybe(json_out=json_out, plain=plain)
     # Passed only when there is a display for it, so the call a test double of
@@ -691,7 +686,9 @@ def research(
     news: bool = typer.Option(False, help="Force news search instead of auto-detect."),
     web: bool = typer.Option(False, help="Force web search instead of auto-detect."),
     llm: bool = typer.Option(
-        False, "--llm", help="Abstractive summaries via Gemini, instead of extractive."
+        False,
+        "--llm",
+        help="Abstractive summaries via LLM (OpenAI or Gemini), instead of extractive.",
     ),
     synth: bool = typer.Option(False, "--synth", help="One overall answer from all summaries."),
     no_api: bool = typer.Option(False, "--no-api", help="Never call the Firecrawl API."),
@@ -866,15 +863,15 @@ def status() -> None:
     """Health check: local Firecrawl, API key, ddgs, and today's API usage."""
     loaded = _load(None)
     firecrawl_key = resolve_api_key(loaded, os.environ)
-    openai_key = resolve_openai_key(loaded, os.environ)
     gemini_key = resolve_gemini_key(loaded, os.environ)
+    openai_key = resolve_openai_key(loaded, os.environ)
     used = usage_today(loaded.paths.state_dir / "api-calls.jsonl")
     local_ok = asyncio.run(_local_firecrawl(loaded).health())
     ddgs_ok = _ddgs_reachable()
 
     def row(label: str, ok: bool, detail: str) -> str:
         mark = "✔" if ok else "✘"
-        return f"{mark} {label:<13} {detail}"
+        return f"{mark} {label:<15} {detail}"
 
     lines = [
         row(
@@ -891,16 +888,16 @@ def status() -> None:
             + ("" if firecrawl_key else ". Set it to use the cloud API."),
         ),
         row(
-            "gemini key",
-            gemini_key is not None,
-            f"{loaded.briefing.gemini.api_key_env} is {'set' if gemini_key else 'not set'}"
-            + ("" if gemini_key else ". Set it to use --llm/--synth."),
-        ),
-        row(
             "openai key",
             openai_key is not None,
             f"{loaded.briefing.openai.api_key_env} is {'set' if openai_key else 'not set'}"
             + ("" if openai_key else ". Set it to use --llm/--synth."),
+        ),
+        row(
+            "gemini key",
+            gemini_key is not None,
+            f"{loaded.briefing.gemini.api_key_env} is {'set' if gemini_key else 'not set'}"
+            + ("" if gemini_key else ". Set it to use --llm/--synth."),
         ),
         row("ddgs", ddgs_ok, "reachable" if ddgs_ok else "unreachable"),
         row(
@@ -953,19 +950,16 @@ def show_config(
         ),
         f"summary     {loaded.summary.mode} · {loaded.summary.sentences} sentences",
         f"gemini      {loaded.briefing.gemini.model} · key env {loaded.briefing.gemini.api_key_env}",
-        f"openai      {loaded.briefing.openai.model} · base_url {loaded.briefing.openai.base_url} · key env {loaded.briefing.openai.api_key_env}",
+        f"openai      {loaded.briefing.openai.model} · key env {loaded.briefing.openai.api_key_env}",
         (
             f"dedup       {loaded.dedup.headline_ttl_days} day TTL"
             f" · {loaded.dedup.schedule_window_hours}h schedule window"
         ),
         f"topics      {', '.join(loaded.news_topics)}",
         f"blocklist   {', '.join(loaded.blocklist_topics)}",
-        (
-            f" · {len(loaded.preferred_sources.sources)} sources"
-            if loaded.preferred_sources.enabled
-            else ""
-        ),
     ]
+    if loaded.preferred_sources.enabled:
+        lines.append(f"preferred   {len(loaded.preferred_sources.sources)} sources")
     for line in lines:
         typer.echo(line)
 
@@ -990,13 +984,7 @@ def _research(
     Every failure path exits with a plain-English message and a fix hint and no
     traceback (SPEC section 3); `_load` already turns a `ConfigError` into one.
     """
-    if news and web:
-        _fail(
-            "--news and --web both set the search mode.",
-            "Pick one: drop --news, or drop --web.",
-        )
-    loaded = _load(config)
-    _configure_logging(loaded, verbose)
+    loaded = _begin(config, verbose, news=news, web=web)
 
     if results is not None and results < 1:
         _fail(f"--results must be at least 1, not {results}.", "Try a value like 10.")
@@ -1009,15 +997,15 @@ def _research(
 
     whitelist = _whitelist(loaded)
     ui = None if json_out else UI(plain=plain)
-    # Built only when a flag asks for it. Neither Gemini feature is on by default
+    # Built only when a flag asks for it. LLM features are on by default
     # (SPEC section 2), and a client that is never called is never built.
-    gemini_key = resolve_gemini_key(loaded, os.environ)
-    if (llm or synth) and not gemini_key:
+    has_llm = _has_llm(loaded)
+    if (llm or synth) and not has_llm:
         typer.echo(
-            "No Gemini API key found (set GEMINI_API_KEY); using extractive summary.",
+            "No LLM API key found (set OPENAI_API_KEY or GEMINI_API_KEY); using extractive summary.",
             err=True,
         )
-    summarizer = _SUMMARIZER(loaded) if (llm or synth) and gemini_key else None
+    summarizer = _SUMMARIZER(loaded) if (llm or synth) and has_llm else None
     pipeline = _PIPELINE(
         searcher=searcher,
         router=_router(loaded, no_api, whitelist),
@@ -1037,15 +1025,16 @@ def _research(
     # `--synth` is its own call, after the run: it answers from every page, so it
     # has nothing to say until the run is over. Second `asyncio.run` rather than a
     # nested one, because the pipeline's loop is already closed by then.
+    cited = _answer_sources(report)
     answer_text = (
-        asyncio.run(summarizer.answer(query=query, sources=_answer_sources(report)))
+        asyncio.run(summarizer.answer(query=query, sources=cited))
         if synth and summarizer is not None
         else None
     )
     if ui is not None:
         ui.show(report)
         if answer_text:
-            ui.console.print(answer(answer_text))
+            ui.console.print(answer(answer_text, plain=ui.plain, sources=len(cited)))
     else:
         typer.echo(json.dumps(_as_json(report, answer_text), indent=2))
     LOG.info(
@@ -1083,10 +1072,9 @@ async def _briefing(loaded: Config, *, dry_run: bool) -> None:
     patches the seams instead of calling this directly, which is what keeps the
     whole graph — including `voice-tts` — off a real run.
     """
-    gemini_key = resolve_gemini_key(loaded, os.environ)
-    if not gemini_key:
+    if not _has_llm(loaded):
         typer.echo(
-            "No Gemini API key found (set GEMINI_API_KEY); using plain greeting.",
+            "No LLM API key found (set OPENAI_API_KEY or GEMINI_API_KEY); using plain greeting.",
             err=True,
         )
     store = _DEDUP(loaded)
@@ -1102,9 +1090,12 @@ async def _briefing(loaded: Config, *, dry_run: bool) -> None:
     keep = TopicFilter(loaded.blocklist_topics).keep(loaded.news_topics)
     search = _SEARCH(loaded)
     fresh: list[str] = []
+    queued: set[str] = set()
     for topic in keep:
         for headline in await search.headlines(topic):
-            if headline.strip() and not store.seen(headline):
+            digest = headline_hash(headline)
+            if headline.strip() and digest not in queued and not store.seen(headline):
+                queued.add(digest)
                 fresh.append(headline)
 
     summary = await FileSessionSummary(loaded.paths.session_summary).text()

@@ -67,6 +67,29 @@ class Answer:
     timings: dict[str, float]
     warnings: list[str]
 
+    def as_dict(self) -> dict[str, t.Any]:
+        """A JSON-serialisable view, for `briefing ask --json`."""
+        return {
+            "question": self.question,
+            "answer": self.text,
+            "used_llm": self.used_llm,
+            "sources": [
+                {
+                    "number": n,
+                    "title": title,
+                    "url": url,
+                    "domain": domain,
+                    "method": method,
+                    "passages": text,
+                    "license": lic,
+                    "author": author,
+                }
+                for n, title, url, domain, method, text, lic, author, _snippet in self.sources
+            ],
+            "timings": self.timings,
+            "warnings": self.warnings,
+        }
+
 
 @dataclasses.dataclass
 class EvidenceSource:
@@ -171,35 +194,24 @@ async def ask(
     search_task = asyncio.create_task(search(query))
 
     # 3. Wait for all tasks (adapters + search) with a shared deadline
-    all_tasks = adapter_lookup_tasks + [search_task]
-    if all_tasks:
-        completed, pending = await asyncio.wait(
-            all_tasks,
-            timeout=deadline_s,
-            return_when=asyncio.ALL_COMPLETED,
-        )
+    completed, pending = await asyncio.wait(
+        [*adapter_lookup_tasks, search_task],
+        timeout=deadline_s,
+        return_when=asyncio.ALL_COMPLETED,
+    )
+    await _cancel_all(pending)
 
-        # Cancel anything still pending after deadline and await them
-        # to avoid "Task exception was never retrieved" warnings
-        for task in pending:
-            task.cancel()
+    # Collect knowledge passages from completed adapter tasks
+    for task in adapter_lookup_tasks:
+        if task in completed:
             try:
-                await task
-            except asyncio.CancelledError:
-                pass  # Expected for cancelled tasks
+                found = task.result()
+                if isinstance(found, list):
+                    knowledge_passages.extend(found[:1])  # At most one passage per adapter
+            except Exception:  # noqa: BLE001, S110
+                pass  # Adapter failed, skip
 
-        # Collect knowledge passages from completed adapter tasks
-        for task in adapter_lookup_tasks:
-            if task in completed:
-                try:
-                    results = task.result()
-                    if isinstance(results, list):
-                        knowledge_passages.extend(results[:1])  # At most one passage per adapter
-                except Exception:  # noqa: BLE001, S110
-                    pass  # Adapter failed, skip
-
-        # Get search results
-        hits = search_task.result() if search_task in completed else []
+    hits = search_task.result() if search_task in completed else []
 
     timings["search"] = time.monotonic() - search_start
     emit("searched", str(len(hits)))
@@ -263,29 +275,19 @@ async def ask(
         emit("model")
         result = await model(prompt, query)
 
-        # T12.2: Handle ModelResult or plain string
+        # T12.2: the model hands back a ModelResult, or an old-style plain string
         if isinstance(result, ModelResult):
-            text = result.text
-            finish_reason = result.finish_reason
-            # Check for truncated answer (MAX_TOKENS, etc.)
-            if text and finish_reason and "MAX_TOKENS" in str(finish_reason):
-                warnings.append("The model's answer was cut off; returning passages instead.")
-                text = None
-            if text is None:
-                warnings.append("Model returned no answer; returning passages instead.")
-                text = _render_passages(sources_data)
-                used_llm = False
-            else:
-                used_llm = True
+            text, finish_reason = result.text, result.finish_reason
         else:
-            # Old-style return (plain string)
-            text = result
-            if text is None:
-                warnings.append("Model returned no answer; returning passages instead.")
-                text = _render_passages(sources_data)
-                used_llm = False
-            else:
-                used_llm = True
+            text, finish_reason = result, None
+        if text and finish_reason and "MAX_TOKENS" in str(finish_reason):
+            warnings.append("The model's answer was cut off; returning passages instead.")
+            text = None
+        elif text is None:
+            warnings.append("Model returned no answer; returning passages instead.")
+        used_llm = text is not None
+        if text is None:
+            text = _render_passages(sources_data)
 
         timings["model"] = time.monotonic() - model_start
 
@@ -297,6 +299,16 @@ async def ask(
         timings=timings,
         warnings=warnings,
     )
+
+
+async def _cancel_all(tasks: t.Iterable[asyncio.Future[t.Any]]) -> None:
+    """Cancel tasks and await them, so none ends with "exception was never retrieved"."""
+    for task in tasks:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass  # Expected for cancelled tasks
 
 
 def _select_one_per_host(
@@ -312,8 +324,6 @@ def _select_one_per_host(
     Excluded hosts are those already served by knowledge adapters, so they
     are skipped to avoid duplication.
     """
-    from briefing.whitelist import normalize_host
-
     excluded = excluded_hosts or set()
     seen_hosts: set[str] = set()
     selected: list[SearchResult] = []
@@ -350,7 +360,6 @@ async def _fetch_with_deadline(
     only the search snippet is left); `query` makes the extraction pick the
     passage that answers the question instead of the top of the page.
     """
-    import asyncio
 
     async def fetch_one(hit: SearchResult, idx: int) -> EvidenceSource:
         method = Method.SNIPPET
@@ -426,13 +435,7 @@ async def _fetch_with_deadline(
             except Exception:  # noqa: BLE001, S110
                 pass  # Skip failed fetches
 
-    # Cancel remaining tasks and await them to avoid warnings
-    for task in pending:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass  # Expected for cancelled tasks
+    await _cancel_all(pending)
 
     # Sort by number to maintain order
     results_data.sort(key=lambda s: s.number)
