@@ -828,6 +828,10 @@ def show_config(
         ),
         f"topics      {', '.join(loaded.news_topics)}",
         f"blocklist   {', '.join(loaded.blocklist_topics)}",
+        (
+            f"preferred   enabled {loaded.preferred_sources.enabled}"
+            + (f" · {len(loaded.preferred_sources.sources)} sources" if loaded.preferred_sources.enabled else "")
+        ),
     ]
     for line in lines:
         typer.echo(line)
