@@ -102,6 +102,24 @@ class GeminiConfig(BaseModel):
     model: str = "gemini-2.5-flash"
 
 
+class OpenAIConfig(BaseModel):
+    """OpenAI-like LLM configuration (supports OpenAI and NVIDIA).
+
+    Mirrors the GeminiConfig pattern with configurable base_url for OpenAI-compatible
+    endpoints like OpenAI's API or NVIDIA's NIM endpoints.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Base URL for the API endpoint (default: OpenAI).
+    #: Set to NVIDIA endpoint (https://integrate.api.nvidia.com/v1) for NVIDIA models.
+    base_url: str = "https://api.openai.com/v1"
+    #: Environment variable holding the API key (default: OPENAI_API_KEY).
+    api_key_env: str = "OPENAI_API_KEY"
+    #: The model to use for generation (default: gpt-4o-mini).
+    model: str = "gpt-4o-mini"
+
+
 class BriefingConfig(BaseModel):
     """Briefing mode's own settings (SPEC section 6).
 
@@ -121,6 +139,8 @@ class BriefingConfig(BaseModel):
     name: str = "Aether"
     #: Gemini LLM configuration for --llm and --synth modes (T9.4).
     gemini: GeminiConfig = GeminiConfig()
+    #: OpenAI-compatible LLM configuration (OpenAI, NVIDIA NIM, etc.).
+    openai: OpenAIConfig = OpenAIConfig()
 
 
 class TimeoutsConfig(BaseModel):
@@ -367,4 +387,14 @@ def resolve_gemini_key(config: Config, env: t.Mapping[str, str]) -> str | None:
     need the key must raise their own error with a fix hint.
     """
     value = env.get(config.briefing.gemini.api_key_env, "")
+    return value or None
+
+
+def resolve_openai_key(config: Config, env: t.Mapping[str, str]) -> str | None:
+    """Read the OpenAI API key from the environment at call time.
+
+    Returns None when the variable is absent or empty — callers that actually
+    need the key must raise their own error with a fix hint.
+    """
+    value = env.get(config.briefing.openai.api_key_env, "")
     return value or None

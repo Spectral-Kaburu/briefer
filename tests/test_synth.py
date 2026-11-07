@@ -18,6 +18,7 @@ already on the result, for the same reason.
 from __future__ import annotations
 
 import typing as t
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -362,3 +363,115 @@ async def test_nothing_is_summarised_when_there_are_no_sources() -> None:
     client = FakeClient()
     assert await ResearchSynth(client).answer(query="q", sources=[]) is None
     assert client.prompts == []
+
+
+# --- OpenAI provider (T13) -----------------------------------------------------
+
+
+async def test_openai_generate_returns_model_result() -> None:
+    """OpenAI client should return ModelResult with text and metadata."""
+    from briefing.synth import OpenAI
+
+    openai = OpenAI(model="gpt-4o-mini", api_key_env="OPENAI_API_KEY")
+
+    # Mock the AsyncOpenAI client and its methods
+    mock_completion = MagicMock()
+    mock_completion.choices = [MagicMock()]
+    mock_completion.choices[0].message.content = "Test response"
+    mock_completion.choices[0].finish_reason = "stop"
+    mock_completion.usage = MagicMock()
+    mock_completion.usage.completion_tokens = 50
+    mock_completion.usage.total_tokens = 100
+
+    mock_chat = MagicMock()
+    mock_chat.completions = MagicMock()
+    mock_chat.completions.create = AsyncMock(return_value=mock_completion)
+
+    mock_client = MagicMock()
+    mock_client.chat = mock_chat
+
+    openai._client = mock_client
+
+    result = await openai.generate("Hello?")
+    assert result.text == "Test response"
+    assert result.finish_reason == "stop"
+    assert result.usage is not None
+
+
+async def test_openai_generate_handles_exceptions() -> None:
+    """OpenAI client should handle API exceptions gracefully."""
+    from briefing.synth import OpenAI
+
+    openai = OpenAI()
+
+    # Mock the AsyncOpenAI client to raise an exception
+    mock_client = MagicMock()
+    mock_client.chat = MagicMock()
+    mock_client.chat.completions = MagicMock()
+    mock_client.chat.completions.create = MagicMock(side_effect=RuntimeError("API error"))
+
+    openai._client = mock_client
+
+    # The generate method should propagate exceptions (they're caught by the caller)
+    with pytest.raises(RuntimeError):
+        await openai.generate("Hello?")
+
+
+async def test_openai_accepts_custom_base_url() -> None:
+    """OpenAI client should accept a custom base_url for NVIDIA or other endpoints."""
+    from briefing.synth import OpenAI
+
+    openai = OpenAI(
+        model="nvidia/llama-3.1-nemotron-70b-instruct",
+        api_key_env="NVIDIA_API_KEY",
+        base_url="https://integrate.api.nvidia.com/v1",
+    )
+    assert openai.base_url == "https://integrate.api.nvidia.com/v1"
+    assert openai.model == "nvidia/llama-3.1-nemotron-70b-instruct"
+
+
+async def test_openai_with_speaker_produces_briefing() -> None:
+    """Speaker should work with OpenAI as the LLM provider."""
+    from briefing.synth import OpenAI, Speaker
+
+    # Create a mock OpenAI client
+    mock_completion = MagicMock()
+    mock_completion.choices = [MagicMock()]
+    mock_completion.choices[0].message.content = "Good morning. Here's your briefing."
+    mock_completion.choices[0].finish_reason = "stop"
+    mock_completion.usage = MagicMock()
+    mock_completion.usage.completion_tokens = 50
+    mock_completion.usage.total_tokens = 100
+
+    # Use the actual OpenAI class with mocked client
+    openai = OpenAI(model="gpt-4o-mini", api_key_env="OPENAI_API_KEY")
+    mock_client = MagicMock()
+    mock_client.chat = MagicMock()
+    mock_client.chat.completions = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)
+    openai._client = mock_client
+
+    speaker = Speaker(openai, name="Aether", user_name="Sam", session_summary="Yesterday")
+
+    result = await speaker.briefing(["News item 1", "News item 2"])
+    assert result.text == "Good morning. Here's your briefing."
+    assert result.fallback is False
+
+
+async def test_openai_client_falls_back_on_exception() -> None:
+    """Speaker falls back when OpenAI client raises an exception."""
+    from briefing.synth import OpenAI, Speaker
+
+    # Use the actual OpenAI class with mocked client that raises
+    openai = OpenAI()
+    mock_client = MagicMock()
+    mock_client.chat = MagicMock()
+    mock_client.chat.completions = MagicMock()
+    mock_client.chat.completions.create = MagicMock(side_effect=RuntimeError("API down"))
+    openai._client = mock_client
+
+    speaker = Speaker(openai, name="Aether", user_name="Sam", session_summary="Yesterday")
+
+    result = await speaker.briefing(["News item 1", "News item 2"])
+    assert result.text == "Good morning, Sam."
+    assert result.fallback is True

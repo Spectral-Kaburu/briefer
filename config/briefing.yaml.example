@@ -80,6 +80,16 @@ briefing:
     api_key_env: GEMINI_API_KEY
     # The model to use for generation.
     model: gemini-2.5-flash
+  # OpenAI-compatible LLM settings (OpenAI, NVIDIA NIM, etc.).
+  # The first configured provider with a valid API key will be used automatically.
+  openai:
+    # Base URL for the API endpoint (default: OpenAI).
+    # Set to NVIDIA endpoint (https://integrate.api.nvidia.com/v1) for NVIDIA models.
+    base_url: https://api.openai.com/v1
+    # Environment variable holding the API key.
+    api_key_env: OPENAI_API_KEY
+    # The model to use for generation.
+    model: gpt-4o-mini
 
 # Ask mode configuration (T9.6): for `briefing -a` and `briefing ask`.
 ask:

@@ -106,7 +106,7 @@ def answer(text: str) -> Panel:
     Through `Text` like every other renderer here, because a model's output is no
     more trusted than a search result's — `[tags]` in it must not become markup.
     """
-    return Panel(Text(text), title="Answer", box=box.SIMPLE, expand=True)
+    return Panel(Text(text), title="Answer", box=box.SIMPLE, expand=True, highlight=True)
 
 
 def footer(report: Report, *, plain: bool = False) -> Panel:

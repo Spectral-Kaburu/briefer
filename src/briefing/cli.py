@@ -33,6 +33,7 @@ from briefing.config import (
     load_config,
     resolve_api_key,
     resolve_gemini_key,
+    resolve_openai_key,
 )
 from briefing.deliver import DeliveryError, SubprocessRunner, deliver
 from briefing.extract import Extracted, extract
@@ -43,7 +44,7 @@ from briefing.log import configure as configure_logging
 from briefing.log import get_logger
 from briefing.pipeline import Pipeline, Report
 from briefing.search import PreferredSite, Searcher, SearchResult
-from briefing.synth import Gemini, ModelResult, ResearchSynth, Speaker
+from briefing.synth import Gemini, ModelResult, OpenAI, ResearchSynth, Speaker
 from briefing.ui import UI, answer, card
 from briefing.whitelist import Whitelist, WhitelistEntry, normalize_host
 
@@ -83,10 +84,40 @@ def _audio(loaded: Config) -> FileAudioState:
     return FileAudioState(loaded.paths.audio_state)
 
 
+def _selected_llm(loaded: Config) -> tuple[t.Any | None, str | None]:
+    """Select the LLM provider that has a valid key.
+
+    Returns (provider, provider_name) or (None, None) if no key is available.
+    Priority: OpenAI config first (if key exists), then Gemini (if key exists).
+    This allows automatic fallback based on which provider has credentials available.
+
+    The caller decides what to do when no key is found (fallback behavior).
+    """
+    import os
+
+    openai_key = resolve_openai_key(loaded, os.environ)
+    gemini_key = resolve_gemini_key(loaded, os.environ)
+
+    if openai_key:
+        return (
+            OpenAI(
+                model=loaded.briefing.openai.model,
+                api_key_env=loaded.briefing.openai.api_key_env,
+                base_url=loaded.briefing.openai.base_url,
+            ),
+            "openai",
+        )
+    if gemini_key:
+        return (Gemini(), "gemini")
+    return (None, None)
+
+
 def _speaker(loaded: Config, session_summary: str = "") -> Speaker:
-    """The real speaker: Gemini for the text, both names and the session."""
+    """The real speaker: configured LLM for the text, both names and the session."""
+    provider, _ = _selected_llm(loaded)
+    llm = provider if provider else Gemini()  # fallback with defaults if no key
     return Speaker(
-        Gemini(),
+        llm,
         name=loaded.briefing.name,
         user_name=loaded.briefing.user_name,
         session_summary=session_summary,
@@ -94,12 +125,14 @@ def _speaker(loaded: Config, session_summary: str = "") -> Speaker:
 
 
 def _summarizer(loaded: Config) -> ResearchSynth:
-    """`--llm` and `--synth`: research mode's two Gemini calls, one client.
+    """LLM client for abstractive summaries, auto-selects provider with key.
 
-    Brief mode's `Speaker` and this both wrap a `Gemini`, so a run makes at most
+    Brief mode's `Speaker` and this both wrap an LLM client, so a run makes at most
     one client and neither mode pays for the other's.
     """
-    return ResearchSynth(Gemini())
+    provider, _ = _selected_llm(loaded)
+    llm = provider if provider else Gemini()  # fallback with defaults if no key
+    return ResearchSynth(llm)
 
 
 # The seams the tests patch by name, so a whole run's collaborator graph swaps
@@ -192,16 +225,15 @@ async def _ask_implementation(
     # Build extractor
     extractor = Extractor(loaded.summary.sentences)
 
-    # Resolve Gemini key for the model
-    gemini_key = resolve_gemini_key(loaded, os.environ)
+    # Resolve LLM for the model - auto-select provider with valid key
+    llm_result = _selected_llm(loaded)
     model: t.Callable[[str, str], t.Awaitable[str | None]] | None = None
-    if gemini_key:
-        from briefing.synth import Gemini
 
-        llm = Gemini()
+    if llm_result[0] is not None:
+        llm, _provider_name = llm_result
 
         async def _model(prompt: str, query: str) -> ModelResult:
-            """Call the Gemini model and return ModelResult with metadata."""
+            """Call the LLM model and return ModelResult with metadata."""
             try:
                 return await llm.generate(prompt)
             except Exception:  # noqa: BLE001
@@ -374,6 +406,7 @@ def _render_answer(answer: Answer, *, plain: bool | None = None) -> None:
         title="Answer",
         box=box.SIMPLE if plain else box.ROUNDED,
         expand=False,
+        highlight=bool(not plain),
     )
     console.print(answer_panel)
 
@@ -813,6 +846,7 @@ def status() -> None:
     """Health check: local Firecrawl, API key, ddgs, and today's API usage."""
     loaded = _load(None)
     firecrawl_key = resolve_api_key(loaded, os.environ)
+    openai_key = resolve_openai_key(loaded, os.environ)
     gemini_key = resolve_gemini_key(loaded, os.environ)
     used = usage_today(loaded.paths.state_dir / "api-calls.jsonl")
     local_ok = asyncio.run(_local_firecrawl(loaded).health())
@@ -841,6 +875,12 @@ def status() -> None:
             gemini_key is not None,
             f"{loaded.briefing.gemini.api_key_env} is {'set' if gemini_key else 'not set'}"
             + ("" if gemini_key else ". Set it to use --llm/--synth."),
+        ),
+        row(
+            "openai key",
+            openai_key is not None,
+            f"{loaded.briefing.openai.api_key_env} is {'set' if openai_key else 'not set'}"
+            + ("" if openai_key else ". Set it to use --llm/--synth."),
         ),
         row("ddgs", ddgs_ok, "reachable" if ddgs_ok else "unreachable"),
         row(
@@ -893,13 +933,14 @@ def show_config(
         ),
         f"summary     {loaded.summary.mode} · {loaded.summary.sentences} sentences",
         f"gemini      {loaded.briefing.gemini.model} · key env {loaded.briefing.gemini.api_key_env}",
+        f"openai      {loaded.briefing.openai.model} · base_url {loaded.briefing.openai.base_url} · key env {loaded.briefing.openai.api_key_env}",
         (
             f"dedup       {loaded.dedup.headline_ttl_days} day TTL"
             f" · {loaded.dedup.schedule_window_hours}h schedule window"
         ),
         f"topics      {', '.join(loaded.news_topics)}",
         f"blocklist   {', '.join(loaded.blocklist_topics)}",
-        +(
+        (
             f" · {len(loaded.preferred_sources.sources)} sources"
             if loaded.preferred_sources.enabled
             else ""

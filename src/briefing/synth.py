@@ -168,6 +168,77 @@ class Gemini:
         return ModelResult(text=response.text, finish_reason=finish_reason, usage=usage_info)
 
 
+class OpenAI:
+    """OpenAI-compatible LLM client for generation.
+
+    Mirrors `Gemini` API: same `generate()` method returning `ModelResult`.
+    Supports OpenAI and NVIDIA API endpoints via configurable `base_url`.
+    Uses the `openai` package (optional dependency) with async support.
+
+    `speaker` and `ResearchSynth` depend on the `generate` method, not on this
+    class, so tests can hand it any object with `async generate(prompt)`.
+    """
+
+    def __init__(
+        self,
+        *,
+        model: str = "gpt-4o-mini",
+        api_key_env: str = "OPENAI_API_KEY",
+        base_url: str = "https://api.openai.com/v1",
+        max_tokens: int = 200,
+    ) -> None:
+        self.model = model
+        self.api_key_env = api_key_env
+        self.base_url = base_url
+        self.max_tokens = max_tokens
+        self._client: t.Any = None
+
+    async def generate(self, prompt: str) -> ModelResult:
+        """Generate a response from the LLM, returning text and metadata.
+
+        The key comes from the configured environment variable via the SDK's
+        explicit `api_key` parameter, so any precedence rules in the OpenAI SDK
+        cannot surprise anyone.
+        """
+        import logging
+
+        logger = logging.getLogger(__name__)
+        import os
+
+        from openai import AsyncOpenAI  # lazy: the extra is optional
+
+        api_key = os.environ.get(self.api_key_env, "")
+        if self._client is None:
+            client_kwargs: dict[str, t.Any] = {"api_key": api_key if api_key else None}
+            if not api_key and self.base_url:
+                # When using base_url (e.g., NVIDIA), don't pass api_key=None alone
+                client_kwargs["base_url"] = self.base_url
+            self._client = AsyncOpenAI(**client_kwargs)
+
+        response = await self._client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=self.max_tokens,
+        )
+
+        finish_reason = response.choices[0].finish_reason
+        usage_info = {
+            "visible_tokens": response.usage.completion_tokens if response.usage else None,
+            "total_tokens": response.usage.total_tokens if response.usage else None,
+        }
+        logger.debug(
+            "OpenAI response: finish_reason=%s total_tokens=%s",
+            finish_reason,
+            usage_info.get("total_tokens"),
+        )
+
+        return ModelResult(
+            text=response.choices[0].message.content,
+            finish_reason=finish_reason,
+            usage=usage_info,
+        )
+
+
 class Speaker:
     """Turns a topic's headlines into what Aether says out loud.
 

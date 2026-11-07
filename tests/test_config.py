@@ -17,6 +17,8 @@ from briefing.config import (
     discover_config,
     load_config,
     resolve_api_key,
+    resolve_gemini_key,
+    resolve_openai_key,
 )
 
 # --- defaults ---------------------------------------------------------------
@@ -41,6 +43,10 @@ def test_defaults_match_spec_sketch() -> None:
     assert cfg.timeouts.per_url_s == 30.0
     assert cfg.timeouts.transient_backoff_s == 0.5
     assert cfg.firecrawl.api.timeout_s == 30.0
+    # OpenAI config defaults
+    assert cfg.briefing.openai.base_url == "https://api.openai.com/v1"
+    assert cfg.briefing.openai.api_key_env == "OPENAI_API_KEY"
+    assert cfg.briefing.openai.model == "gpt-4o-mini"
 
 
 # --- overrides --------------------------------------------------------------
@@ -99,6 +105,36 @@ def test_api_key_respects_custom_key_env(tmp_path: t.Any) -> None:
     path = tmp_path / "briefing.yaml"
     path.write_text("firecrawl:\n  api:\n    key_env: MY_FC_KEY\n", encoding="utf-8")
     assert resolve_api_key(load_config(path), {"MY_FC_KEY": "zz"}) == "zz"
+
+
+def test_gemini_key_read_from_named_env_var() -> None:
+    cfg = load_config()
+    assert resolve_gemini_key(cfg, {"GEMINI_API_KEY": "gemini-123"}) == "gemini-123"
+
+
+def test_missing_gemini_key_returns_none() -> None:
+    assert resolve_gemini_key(load_config(), {}) is None
+
+
+def test_gemini_key_respects_custom_key_env(tmp_path: t.Any) -> None:
+    path = tmp_path / "briefing.yaml"
+    path.write_text("briefing:\n  gemini:\n    api_key_env: MY_GEMINI_KEY\n", encoding="utf-8")
+    assert resolve_gemini_key(load_config(path), {"MY_GEMINI_KEY": "zz"}) == "zz"
+
+
+def test_openai_key_read_from_named_env_var() -> None:
+    cfg = load_config()
+    assert resolve_openai_key(cfg, {"OPENAI_API_KEY": "sk-123"}) == "sk-123"
+
+
+def test_missing_openai_key_returns_none() -> None:
+    assert resolve_openai_key(load_config(), {}) is None
+
+
+def test_openai_key_respects_custom_key_env(tmp_path: t.Any) -> None:
+    path = tmp_path / "briefing.yaml"
+    path.write_text("briefing:\n  openai:\n    api_key_env: MY_OPENAI_KEY\n", encoding="utf-8")
+    assert resolve_openai_key(load_config(path), {"MY_OPENAI_KEY": "zz"}) == "zz"
 
 
 # --- paths ------------------------------------------------------------------

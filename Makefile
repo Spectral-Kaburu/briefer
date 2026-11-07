@@ -3,7 +3,7 @@
 check:
 	.venv/bin/ruff check .
 	.venv/bin/ruff format --check .
-	.venv/bin/pytest
+	.venv/bin/pytest -m "not live"
 
 test:
 	.venv/bin/pytest
