@@ -270,3 +270,19 @@ Skills: `fix-loop` for every fix, `ruthless-review` for T12.6, `superpowers:veri
 - [x] **T12.4** D13 card text. ✅ DONE - Bibliography lines, DOI/PMID/ISSN markers, and escaped-bracket footnotes are now stripped by clean_markdown.
 
 - [x] **T12.6** Close-out. ✅ DONE - All defects fixed, tests pass.
+
+## Phase 13: OpenAI API as alternative LLM provider
+
+The owner requested adding OpenAI API as an alternative LLM provider alongside Gemini. This allows:
+- Configuration switch in YAML to set `preferred_provider`
+- `base_url` as configurable variable to support NVIDIA API endpoint
+- Automatic provider selection (pick the one with a valid API key)
+- Gemini as default fallback when no key is present
+
+- [x] **T13.1** Add `OpenAIConfig` class in `config.py` with `base_url`, `api_key_env`, `model` fields
+- [x] **T13.2** Add `OpenAI` class in `synth.py` implementing the same `generate()` interface as `Gemini`
+- [x] **T13.3** Add `_selected_llm()` helper in `cli.py` for auto-selecting provider with valid key
+- [x] **T13.4** Update config example with `openai` section and `preferred_provider` option
+- [x] **T13.5** Add tests for `resolve_openai_key()` and `OpenAI` class
+- [x] **T13.6** Add tests for provider selection logic with `preferred_provider` config
+- [x] **T13.7** Add comprehensive tests for `_selected_llm()` helper function
