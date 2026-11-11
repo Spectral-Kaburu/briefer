@@ -13,4 +13,4 @@
 All tasks completed successfully:
 - Fixed ruff issues in `scripts/repro_realworld.py`
 - Removed sandbox artifacts (`briefing-phase12/`, `scripts/repro_realworld.py`, `tests/test_live_realworld.py`)
-- `make check` passes: 768 passed, 9 skipped, ruff clean
+- `make check` passes: 768 passed, 9 skipped, ruff cleanEdit tool denied for ~/.claude/skills/herdr/SKILL.md - Data Exfiltration classifier blocked updating skill file with harness agent table

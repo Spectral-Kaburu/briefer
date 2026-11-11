@@ -210,8 +210,11 @@ class OpenAI:
         api_key = os.environ.get(self.api_key_env, "")
         if self._client is None:
             client_kwargs: dict[str, t.Any] = {"api_key": api_key if api_key else None}
-            if not api_key and self.base_url:
-                # When using base_url (e.g., NVIDIA), don't pass api_key=None alone
+            # A configured base_url is the endpoint, full stop: it is independent
+            # of the key. Passing it only when the key was missing sent a real key
+            # (e.g. NVIDIA's) to api.openai.com, which answers 401, which the
+            # swallow-all caller turns into "no answer; returning passages".
+            if self.base_url:
                 client_kwargs["base_url"] = self.base_url
             self._client = AsyncOpenAI(**client_kwargs)
 

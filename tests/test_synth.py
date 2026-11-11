@@ -430,6 +430,45 @@ async def test_openai_accepts_custom_base_url() -> None:
     assert openai.model == "nvidia/llama-3.1-nemotron-70b-instruct"
 
 
+async def test_openai_base_url_is_used_when_a_key_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real key must not silently route the call to api.openai.com.
+
+    Regression: `if not api_key and self.base_url` meant a configured NVIDIA
+    `base_url` was dropped the moment `NVIDIA_API_KEY` was set, so the key went
+    to OpenAI, was answered 401, and `_generate`'s swallow-all turned that into
+    "Model returned no answer; returning passages instead."
+    """
+    from briefing.synth import OpenAI
+
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-not-a-real-key")
+    seen: dict[str, t.Any] = {}
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs: t.Any) -> None:
+            seen.update(kwargs)
+
+    # Patched at the import site: generate() does `from openai import AsyncOpenAI`.
+    import openai
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", FakeAsyncOpenAI)
+
+    openai_client = OpenAI(
+        model="nvidia/llama-3.1-nemotron-70b-instruct",
+        api_key_env="NVIDIA_API_KEY",
+        base_url="https://integrate.api.nvidia.com/v1",
+    )
+
+    with pytest.raises(AttributeError):
+        # The fake has no `.chat`, which stops generate() before any network
+        # call; by then the constructor kwargs are recorded.
+        await openai_client.generate("Hello?")
+
+    assert seen.get("base_url") == "https://integrate.api.nvidia.com/v1"
+    assert seen.get("api_key") == "nvapi-not-a-real-key"
+
+
 async def test_openai_with_speaker_produces_briefing() -> None:
     """Speaker should work with OpenAI as the LLM provider."""
     from briefing.synth import OpenAI, Speaker

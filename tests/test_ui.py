@@ -380,8 +380,13 @@ def test_the_header_cards_and_footer_render_through_one_ui() -> None:
     assert "whitelist +1 (example.co.ke: captcha)" in out
 
 
-def test_plain_mode_switches_color_off_on_the_console() -> None:
+def test_plain_mode_switches_color_off_on_the_console(
+    monkeypatch: t.Any,
+) -> None:
     """`--plain` and a piped console both mean no decoration (SPEC section 3)."""
+    # Rich reads NO_COLOR when the Console is built, so a shell that exports it
+    # would make this assertion pass or fail by environment alone.
+    monkeypatch.delenv("NO_COLOR", raising=False)
     console = Console(**_COLORED)  # type: ignore[arg-type]
     UI(console, plain=True)
     assert console.no_color is True
