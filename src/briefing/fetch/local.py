@@ -86,13 +86,22 @@ class LocalFirecrawl:
             )
         except (httpx.TimeoutException, httpx.ConnectError, httpx.ConnectTimeout, OSError) as exc:
             classified = classify(exc=exc, origin=Origin.LOCAL)
+            logger.warning(
+                "local Firecrawl scrape of %s at %s failed with %s: %s; %s",
+                url,
+                self.base_url,
+                type(exc).__name__,
+                exc,
+                classified.reason,
+                exc_info=True,
+            )
             return LocalScrapeResult(
                 ok=False, error_class=classified.error_class, reason=classified.reason
             )
 
-        return self._from_response(response)
+        return self._from_response(response, url)
 
-    def _from_response(self, response: httpx.Response) -> LocalScrapeResult:
+    def _from_response(self, response: httpx.Response, url: str) -> LocalScrapeResult:
         body = response.text
         code = _error_code(response)
         # The classifier needs the extracted content only to spot a near-empty
@@ -113,6 +122,14 @@ class LocalFirecrawl:
             origin=Origin.LOCAL,
         )
         if classified.error_class is not ErrorClass.OK:
+            logger.warning(
+                "local Firecrawl scrape of %s at %s answered HTTP %s%s: %s",
+                url,
+                self.base_url,
+                response.status_code,
+                f" ({code})" if code else "",
+                classified.reason,
+            )
             return LocalScrapeResult(
                 ok=False,
                 status_code=status if isinstance(status, int) else None,
@@ -133,8 +150,23 @@ class LocalFirecrawl:
         """True when the local instance answers a plain GET on its root."""
         try:
             response = await self._http().get(f"{self.base_url}/")
-        except (httpx.TimeoutException, httpx.ConnectError, httpx.ConnectTimeout, OSError):
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.ConnectTimeout, OSError) as exc:
+            logger.warning(
+                "local Firecrawl health check at %s failed with %s: %s; "
+                "start it with docker compose up -d or raise firecrawl.local.timeout_s",
+                self.base_url,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
             return False
+        if response.status_code >= 500:
+            logger.warning(
+                "local Firecrawl health check at %s answered HTTP %s; "
+                "start it with docker compose up -d",
+                self.base_url,
+                response.status_code,
+            )
         return response.status_code < 500
 
 
@@ -194,7 +226,13 @@ class FirecrawlSearch:
             logger.debug("backup search %s failed: %r", self.base_url, exc)
             return []
         if response.status_code >= 400:
-            logger.debug("backup search %s answered %d", self.base_url, response.status_code)
+            logger.warning(
+                "backup search for %r at %s answered HTTP %s; the ddgs fallback "
+                "is exhausted, so this search returns nothing",
+                query,
+                self.base_url,
+                response.status_code,
+            )
             return []
         return _normalize(response, source)
 

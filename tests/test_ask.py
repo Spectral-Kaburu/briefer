@@ -7,6 +7,7 @@ Tests are fake-driven: no real search, fetch, or model is ever called.
 from __future__ import annotations
 
 import dataclasses
+import logging
 from datetime import UTC, datetime
 
 import pytest
@@ -85,11 +86,11 @@ def test_answer_with_no_llm_returns_passages_and_warning() -> None:
         used_llm=False,
         sources=[(1, "Title", "https://example.com", "example.com", "LOCAL", "Extracted text...")],
         timings={"search": 0.1, "fetch": 0.2},
-        warnings=["No Gemini key; returning passages only"],
+        warnings=["No LLM key; returning passages only"],
     )
     assert answer.used_llm is False
     assert len(answer.warnings) == 1
-    assert "Gemini" in answer.warnings[0]
+    assert "LLM key" in answer.warnings[0]
 
 
 # --- Test: numbering sources correctly -------------------------------------
@@ -437,12 +438,14 @@ async def test_no_model_degrades_to_passages() -> None:
     )
 
     assert result.used_llm is False
-    assert any("Gemini" in w or "key" in w.lower() for w in result.warnings)
+    assert any("OPENAI_API_KEY" in w or "GEMINI_API_KEY" in w for w in result.warnings), (
+        f"Warning does not name either provider env var: {result.warnings}"
+    )
 
 
 @pytest.mark.asyncio
 async def test_missing_key_degrades_to_passages() -> None:
-    """When Gemini key is missing, return passages with warning."""
+    """When no API key is present, return passages with a warning naming the keys."""
     hits = [
         FakeSearchResult(title="Result", url="https://example.com", snippet="Some content"),
     ]
@@ -469,7 +472,7 @@ async def test_missing_key_degrades_to_passages() -> None:
 
     assert result.used_llm is False
     assert len(result.warnings) >= 1
-    assert " passages" in result.warnings[0].lower() or "Gemini" in result.warnings[0]
+    assert " passages" in result.warnings[0].lower() or "OPENAI_API_KEY" in result.warnings[0]
 
 
 # --- Test: empty search -> clear error ------------------------------------
@@ -499,12 +502,19 @@ async def test_empty_search_gives_clear_error() -> None:
 # --- Test: model failure degradation --------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_model_failure_degrades_to_passages() -> None:
-    """When model fails (returns None), degrade to passages."""
-    hits = [
-        FakeSearchResult(title="Result", url="https://example.com", snippet="Content"),
-    ]
+class FakeGemini:
+    """A model that fails the way the real wrapper does: silently returning None."""
+
+    def __init__(self, result: object) -> None:
+        self._result = result
+
+    async def __call__(self, prompt: str, query: str) -> object:
+        return self._result
+
+
+def _ask_kwargs(model: object) -> dict[str, object]:
+    """The fakes every ask() test here needs, with the given model."""
+    hits = [FakeSearchResult(title="Result", url="https://example.com", snippet="Content")]
 
     async def fake_search(query: str) -> list[FakeSearchResult]:
         return hits  # type: ignore
@@ -517,20 +527,81 @@ async def test_model_failure_degrades_to_passages() -> None:
     ) -> tuple[str, str]:
         return heading, markdown[:50]
 
-    # Model returns None (simulating blocked or failure)
-    async def fake_model(prompt: str, query: str) -> str | None:
-        return None
+    return {
+        "query": "test",
+        "search": fake_search,
+        "fetch": fake_fetch,
+        "extract": fake_extract,
+        "model": model,
+    }
 
-    result = await ask(
-        query="test",
-        search=fake_search,  # type: ignore
-        fetch=fake_fetch,  # type: ignore
-        extract=fake_extract,
-        model=fake_model,
-    )
+
+@pytest.mark.asyncio
+async def test_model_failure_degrades_to_passages() -> None:
+    """When model fails (returns None), degrade to passages."""
+    result = await ask(**_ask_kwargs(FakeGemini(None)))  # type: ignore[arg-type]
 
     assert result.used_llm is False
-    assert any("Model" in w or " passages" in w.lower() for w in result.warnings)
+    assert len(result.warnings) >= 1
+    assert any("Model" in w or "model" in w or " passages" in w.lower() for w in result.warnings)
+
+
+@pytest.mark.asyncio
+async def test_model_returning_none_names_the_model_and_passages() -> None:
+    """A silent model failure must name the model and say passages are shown."""
+    result = await ask(**_ask_kwargs(FakeGemini(None)))  # type: ignore[arg-type]
+
+    assert result.used_llm is False
+    assert result.warnings, "No warning was emitted for a model that returned nothing"
+    warning = result.warnings[0]
+    assert "FakeGemini" in warning, f"Warning does not name the model: {warning!r}"
+    assert "passages" in warning.lower(), f"Warning does not say passages are shown: {warning!r}"
+
+
+@pytest.mark.asyncio
+async def test_cutoff_answer_names_the_finish_reason() -> None:
+    """A MAX_TOKENS cutoff must report the finish_reason and the token count."""
+    from briefing.synth import ModelResult
+
+    cut_off = ModelResult(
+        text="A partial answer",
+        finish_reason="MAX_TOKENS",
+        usage={"visible_tokens": 512, "total_tokens": 700},
+    )
+
+    result = await ask(**_ask_kwargs(FakeGemini(cut_off)))  # type: ignore[arg-type]
+
+    assert result.used_llm is False
+    warning = result.warnings[0]
+    assert "MAX_TOKENS" in warning, f"Warning does not name the finish_reason: {warning!r}"
+    assert "512" in warning, f"Warning does not give the token count: {warning!r}"
+    assert "passages" in warning.lower(), f"Warning does not say passages are shown: {warning!r}"
+
+
+@pytest.mark.asyncio
+async def test_no_model_warning_names_both_provider_env_vars() -> None:
+    """The no-key warning must name both providers, not just Gemini."""
+    result = await ask(**_ask_kwargs(None))  # type: ignore[arg-type]
+
+    warning = result.warnings[0]
+    assert "OPENAI_API_KEY" in warning, f"Warning does not name OpenAI's env var: {warning!r}"
+    assert "GEMINI_API_KEY" in warning, f"Warning does not name Gemini's env var: {warning!r}"
+    assert "passages" in warning.lower(), f"Warning does not say passages are shown: {warning!r}"
+
+
+@pytest.mark.asyncio
+async def test_silent_model_failure_is_logged_as_a_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The WARNING log record must name the component and the question."""
+    with caplog.at_level(logging.WARNING, logger="briefing.ask"):
+        await ask(**_ask_kwargs(FakeGemini(None)))  # type: ignore[arg-type]
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings, f"No WARNING logged for the model failure: {caplog.records!r}"
+    record = warnings[0]
+    assert "FakeGemini" in record.getMessage()
+    assert "test" in record.getMessage()  # the question
 
 
 # --- Test: passages rendering --------------------------------------------

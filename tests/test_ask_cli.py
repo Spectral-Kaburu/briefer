@@ -408,7 +408,9 @@ def test_ask_no_model_warning(monkeypatch: t.Any, tmp_path: t.Any) -> None:
             (1, "Python Lang", "https://python.org", "python.org", "LOCAL", "Content", "", "", "")
         ],
         timings={"search": 0.3, "fetch": 0.2},
-        warnings=["No Gemini API key found; returning passages only."],
+        warnings=[
+            "No LLM API key found (set OPENAI_API_KEY or GEMINI_API_KEY); returning passages only."
+        ],
     )
 
     async def fake_ask(*args: t.Any, **kwargs: t.Any) -> Answer:
@@ -418,7 +420,8 @@ def test_ask_no_model_warning(monkeypatch: t.Any, tmp_path: t.Any) -> None:
 
     result = runner.invoke(cli_module.app, ["ask", "What is Python?"])
     assert result.exit_code == 0, result.stderr
-    assert "warning" in result.stdout.lower() or "Gemini" in result.stdout
+    assert "OPENAI_API_KEY" in result.stdout, "The no-key warning must name OpenAI's env var"
+    assert "GEMINI_API_KEY" in result.stdout, "The no-key warning must name Gemini's env var"
 
 
 def test_ask_error_moving_and_a_question_is_clean(monkeypatch: t.Any, tmp_path: t.Any) -> None:

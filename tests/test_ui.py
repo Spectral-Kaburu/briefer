@@ -357,6 +357,20 @@ def test_the_footer_omits_empty_sections() -> None:
     assert "whitelist" not in out
 
 
+def test_the_footer_names_local_firecrawl_when_it_was_down() -> None:
+    """SPEC section 4: a run with local Firecrawl down must say so once, not once
+    per card. `Report.local_down` is the single flag that carries it."""
+    report = _report(local_down=True)
+    out = _render(footer(report))
+    assert "local Firecrawl is not running" in out
+    assert out.count("not running") == 1
+
+
+def test_the_footer_omits_the_notice_when_local_was_up() -> None:
+    out = _render(footer(_report(local_down=False)))
+    assert "not running" not in out
+
+
 def test_the_footer_survives_a_run_with_no_results() -> None:
     out = _render(footer(_report(found=0, elapsed_s=0.0), plain=False))
     assert "0 found" in out

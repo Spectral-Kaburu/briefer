@@ -79,6 +79,11 @@ class Result:
 class Report:
     """The run's outcome: ordered results plus the counts the footer shows.
 
+    `local_down` is True when any page in the run found the local Firecrawl
+    instance unreachable: the one failure whose per-reason line is identical for
+    every result, and whose fix (start the instance) is a single action rather
+    than something to repeat per card.
+
     `whitelisted` carries (domain, reason) pairs so the footer can render
     SPEC section 3's `whitelist +1 (example.co.ke: captcha)` caption without
     reaching into the whitelist store itself.
@@ -89,6 +94,9 @@ class Report:
     found: int = 0
     whitelisted: list[tuple[str, str]] = dataclasses.field(default_factory=list)
     elapsed_s: float = 0.0
+    #: True when the local Firecrawl instance was unreachable at any point in
+    #: the run (drives the footer's single notice; see the class docstring).
+    local_down: bool = False
     progress: Progress | None = None
 
     def by_method(self) -> dict[Method, int]:
@@ -215,6 +223,7 @@ class Pipeline:
             found=len(usable),
             whitelisted=self._added(before),
             elapsed_s=time.monotonic() - started,
+            local_down=any(r.error_class is ErrorClass.LOCAL_DOWN for r in results),
             progress=self.progress,
         )
 

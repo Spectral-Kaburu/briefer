@@ -17,12 +17,13 @@ already on the result, for the same reason.
 
 from __future__ import annotations
 
+import logging
 import typing as t
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from briefing.synth import NO_NAME_GREETING, ResearchSynth, Speaker
+from briefing.synth import NO_NAME_GREETING, ModelResult, ResearchSynth, Speaker
 
 # Every test here awaits, so the marker is module-wide rather than 13 copies.
 pytestmark = pytest.mark.asyncio
@@ -41,10 +42,14 @@ class FakeClient:
         self,
         text: str | None = "Good morning. Here is your briefing.",
         raises: Exception | None = None,
+        model: str = "gemini-2.5-flash",
     ) -> None:
         self.text = text
         self.raises = raises
         self.prompts: list[str] = []
+        # What the real client carries, so a failure's log line can name the
+        # model that produced (or failed to produce) the answer.
+        self.model = model
 
     async def generate(self, prompt: str) -> str | None:
         self.prompts.append(prompt)
@@ -514,3 +519,247 @@ async def test_openai_client_falls_back_on_exception() -> None:
     result = await speaker.briefing(["News item 1", "News item 2"])
     assert result.text == "Good morning, Sam."
     assert result.fallback is True
+
+
+# --- a model failure says what and why (visibility) -------------------------
+
+
+class RaisingClient:
+    """Same duck-type as `Gemini`, but raises. Names the model so the log line
+    can be checked for it, and no test ever constructs a real client or a key."""
+
+    def __init__(self, error: Exception, model: str = "gemini-2.5-flash") -> None:
+        self.error = error
+        self.model = model
+
+    async def generate(self, prompt: str) -> t.Any:
+        raise self.error
+
+
+class ModelResultClient:
+    """Returns a canned `ModelResult`, the way the real clients do."""
+
+    def __init__(self, result: t.Any, model: str = "gemini-2.5-flash") -> None:
+        self.result = result
+        self.model = model
+
+    async def generate(self, prompt: str) -> t.Any:
+        return self.result
+
+
+def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """The rendered messages of the WARNING records at the synth logger."""
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING and record.name == "briefing.synth"
+    ]
+
+
+async def test_a_model_that_raises_says_the_exception_and_the_model(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The swallow-all caller used to return None silently, so the log (and the
+    owner reading it) could not tell a 401 from a quota cap from a dead network.
+    Now it names the exception class, its message and the model that raised."""
+    with caplog.at_level(logging.WARNING, logger="briefing.synth"):
+        briefing = await speaker(RaisingClient(RuntimeError("boom"))).briefing(HEADLINES)
+
+    assert briefing.fallback is True  # behaviour is unchanged
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1, warnings
+    assert "RuntimeError" in warnings[0]
+    assert "boom" in warnings[0]
+    assert "gemini-2.5-flash" in warnings[0]
+
+
+async def test_the_exception_path_passes_the_traceback_to_the_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """`exc_info=True` is what puts the stack in the log file; without it the
+    class and message are all there is, which is not enough to diagnose a call."""
+    with caplog.at_level(logging.WARNING, logger="briefing.synth"):
+        await speaker(RaisingClient(RuntimeError("boom"))).briefing(HEADLINES)
+
+    records = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(records) == 1
+    assert records[0].exc_info is not None
+    assert records[0].exc_info[0] is RuntimeError
+
+
+async def test_an_empty_answer_says_it_came_back_empty(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A model that returns nothing used to be indistinguishable from one that
+    raised: both just produced the greeting. Now the empty case names itself."""
+    with caplog.at_level(logging.WARNING, logger="briefing.synth"):
+        briefing = await speaker(FakeClient(text="")).briefing(HEADLINES)
+
+    assert briefing.fallback is True
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1, warnings
+    assert "no text" in warnings[0]
+    assert "gemini-2.5-flash" in warnings[0]
+
+
+async def test_a_whitespace_only_answer_says_it_came_back_empty(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Whitespace-only is the same silent failure as empty, and says so too."""
+    with caplog.at_level(logging.WARNING, logger="briefing.synth"):
+        briefing = await speaker(FakeClient(text="  \n\t ")).briefing(HEADLINES)
+
+    assert briefing.fallback is True
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1, warnings
+    assert "whitespace" in warnings[0]
+
+
+async def test_a_max_tokens_result_names_the_provider_and_the_model(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """T12.2's truncation warning survives, and now says which model it was, so
+    the token cap can be the thing that gets raised."""
+    with caplog.at_level(logging.WARNING, logger="briefing.synth"):
+        result = await speaker(
+            ModelResultClient(
+                ModelResult(text=None, finish_reason="MAX_TOKENS"),
+            )
+        ).briefing(HEADLINES)
+
+    assert result.fallback is True
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1, warnings
+    assert "MAX_TOKENS" in warnings[0]
+    assert "gemini-2.5-flash" in warnings[0]
+
+
+async def test_a_successful_model_call_logs_no_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The visibility is for failures only: a briefing that worked must not
+    produce a warning, or the log stops meaning anything."""
+    with caplog.at_level(logging.WARNING, logger="briefing.synth"):
+        briefing = await speaker(FakeClient("A briefing worth saying.")).briefing(HEADLINES)
+
+    assert briefing.fallback is False
+    assert _warnings(caplog) == []
+
+
+async def test_a_missing_openai_package_is_not_invisible(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The `openai` extra is optional, so the import is lazy — and a lazy import
+    that failed said nothing at all. Now the missing package is named, with the
+    endpoint it was needed for and the fix hint."""
+    import sys
+    import types
+
+    stub = types.ModuleType("openai")
+
+    def _no_async_openai(name: str) -> t.NoReturn:
+        if name == "AsyncOpenAI":
+            raise ImportError("No module named 'openai'")
+        raise AttributeError(name)
+
+    # A stub rather than sys.modules['openai'] = None: the latter raises a bare
+    # ModuleNotFoundError that does not say which import failed.
+    stub.__getattr__ = _no_async_openai
+    monkeypatch.setitem(sys.modules, "openai", stub)
+
+    from briefing.synth import OpenAI
+
+    client = OpenAI(
+        model="nvidia/llama-3.1-nemotron-70b-instruct",
+        api_key_env="NVIDIA_API_KEY",
+        base_url="https://integrate.api.nvidia.com/v1",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="briefing.synth"), pytest.raises(ImportError):
+        await client.generate("Hello?")
+
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1, warnings
+    assert "openai" in warnings[0]
+    assert "not installed" in warnings[0]
+    assert "https://integrate.api.nvidia.com/v1" in warnings[0]
+    assert "nvidia/llama-3.1-nemotron-70b-instruct" in warnings[0]
+
+
+async def test_a_client_that_cannot_be_constructed_names_the_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The SDK constructor reads the environment; a misconfigured endpoint or a
+    bad key raised out of it, and the swallow-all caller could only say "no
+    answer". Now the construction failure says which endpoint and why."""
+    import openai
+
+    class BrokenAsyncOpenAI:
+        def __init__(self, **kwargs: t.Any) -> None:
+            raise ValueError("api_key must be a string, not None")
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", BrokenAsyncOpenAI)
+
+    from briefing.synth import OpenAI
+
+    client = OpenAI(
+        model="gpt-4o-mini",
+        api_key_env="OPENAI_API_KEY",
+        base_url="https://api.openai.com/v1",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="briefing.synth"), pytest.raises(ValueError):
+        await client.generate("Hello?")
+
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1, warnings
+    assert "api_key must be a string" in warnings[0]
+    assert "https://api.openai.com/v1" in warnings[0]
+    assert "gpt-4o-mini" in warnings[0]
+
+
+async def test_no_openai_message_ever_carries_a_key(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """CLAUDE.md's one log rule: the key must not survive. This module never
+    interpolates the key itself — the message carries the model name and the
+    endpoint, and the key itself is masked on its way to the sink by
+    `log.SecretFilter` (test_log.py covers that). Assert both halves: what this
+    module composes, and that the record is safe there."""
+    import openai
+
+    class KeyCheckingAsyncOpenAI:
+        def __init__(self, **kwargs: t.Any) -> None:
+            # A message that mentions neither the key nor a slug of one: the
+            # realistic non-echoing case, so the assertion is about what this
+            # module composes. `SecretFilter` covers the echoing case, and
+            # test_log.py asserts that.
+            raise ValueError("invalid api key given; check that the endpoint is reachable")
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", KeyCheckingAsyncOpenAI)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-key-from-a-test")
+
+    from briefing.synth import OpenAI
+
+    client = OpenAI(model="gpt-4o-mini", api_key_env="OPENAI_API_KEY")
+
+    with (
+        caplog.at_level(logging.WARNING, logger="briefing.synth"),
+        pytest.raises(ValueError, match="invalid api key given"),
+    ):
+        await client.generate("Hello?")
+
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1
+    # What this module composes: the model, the endpoint and the reason — never
+    # the key itself, nor any part of it.
+    assert "gpt-4o-mini" in warnings[0]
+    assert "https://api.openai.com/v1" in warnings[0]
+    assert "ValueError" in warnings[0]
+    assert "sk-fake-key-from-a-test" not in warnings[0]
+    # No key slug either: nothing of the key's value is logged in any form.
+    for part in ("sk-fake-key", "fake-key-from-a-test", "sk-fake"):
+        assert part not in warnings[0]

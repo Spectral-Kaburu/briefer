@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import typing as t
 from datetime import datetime
 from pathlib import Path
@@ -17,7 +18,9 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import BaseModel
 
-from .errors import ErrorClass, Origin, classify
+from .errors import Classification, ErrorClass, Origin, classify
+
+logger = logging.getLogger(__name__)
 
 _SCRAPE_PATH = "/v2/scrape"
 
@@ -142,6 +145,12 @@ class ApiFirecrawl:
         outcome = "no-key" if not self.api_key else await self._reserve()
         if outcome is not None:
             self._log(url, domain, reason, outcome)
+            if outcome == "no-key":
+                self._warn_no_key(url, reason)
+            elif outcome == "disabled":
+                self._warn_disabled(url, reason)
+            else:
+                self._warn_capped(url, reason)
             return ApiScrapeResult(
                 ok=False, error_class=ErrorClass.API_SIDE, reason=self._degraded_reason(outcome)
             )
@@ -155,14 +164,26 @@ class ApiFirecrawl:
         except (httpx.TimeoutException, httpx.ConnectError, OSError) as exc:
             classified = classify(exc=exc, origin=Origin.API)
             self._log(url, domain, reason, "transport-error")
+            # The traceback must reach the log file, so it is attached here in the
+            # handler that caught it (LOG014 forbids `exc_info=True` in a helper).
+            logger.warning(
+                "Cloud API: %s (reason: %s) failed in transit: %s: %s",
+                url,
+                reason,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
             self._refund()  # nothing was billed
             return ApiScrapeResult(
                 ok=False, error_class=classified.error_class, reason=classified.reason
             )
 
+        status = response.status_code
+        code = _error_code(response)
         classified = classify(
-            status=response.status_code,
-            code=_error_code(response),
+            status=status,
+            code=code,
             body=response.text,
             content=_markdown(response),
             origin=Origin.API,
@@ -170,6 +191,7 @@ class ApiFirecrawl:
         # The classifier sees origin=API, so it returns API_SIDE for 402/429/401.
         if classified.error_class not in _OK_CLASSES:
             self._log(url, domain, reason, classified.error_class.value)
+            self._warn_classified(url, reason, classified, status, code)
             if classified.error_class is ErrorClass.API_SIDE:
                 # Stop spending money: a refused API is refused for the whole run.
                 self._disabled = True
@@ -194,6 +216,54 @@ class ApiFirecrawl:
         if outcome == "disabled":
             return "the cloud API refused an earlier request, so only the snippet is available"
         return f"the daily API limit of {self.daily_limit} is reached, so only the snippet is available"
+
+    def _warn_no_key(self, url: str, reason: str) -> None:
+        """The keyless degradation: name the env var the caller should set."""
+        logger.warning(
+            "Cloud API: no key configured, so %s (reason: %s) falls back to the search "
+            "snippet only. %s",
+            url,
+            reason,
+            _CONFIG_HINT,
+        )
+
+    def _warn_capped(self, url: str, reason: str) -> None:
+        """The cap was hit; say how many calls the run is allowed in total."""
+        logger.warning(
+            "Cloud API: the daily API limit of %d is reached, so %s (reason: %s) falls "
+            "back to the search snippet only. Raise firecrawl.api.daily_limit to allow more.",
+            self.daily_limit,
+            url,
+            reason,
+        )
+
+    def _warn_disabled(self, url: str, reason: str) -> None:
+        """An earlier refusal stopped the API for the rest of the run."""
+        logger.warning(
+            "Cloud API: the API refused an earlier request and is not called again this "
+            "run, so %s (reason: %s) falls back to the search snippet only.",
+            url,
+            reason,
+        )
+
+    def _warn_classified(
+        self,
+        url: str,
+        reason: str,
+        classified: Classification,
+        status: int | None = None,
+        code: str | None = None,
+    ) -> None:
+        """A failure with a status/answer: name the HTTP status and the Firecrawl code."""
+        where = f"HTTP {status}" if status is not None else "the API"
+        detail = f"{where}{f' ({code})' if code else ''}"
+        logger.warning(
+            "Cloud API: %s (reason: %s) failed with %s: %s",
+            url,
+            reason,
+            detail,
+            classified.reason,
+        )
 
     def _log(self, url: str, domain: str, reason: str, outcome: str) -> None:
         """Append one JSON line. Never contains the key; never contains body text."""

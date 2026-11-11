@@ -490,7 +490,22 @@ class Searcher:
             logger.info("ddgs returned nothing, trying backup")
             backup_results = await self._backup_search(query)
             # T12.1: Also re-rank backup results to ensure relevance
-            return _rerank_results(backup_results, query, [site.domain for site in relevant])
+            reranked = _rerank_results(backup_results, query, [site.domain for site in relevant])
+            if not reranked:
+                logger.warning(
+                    "no results for %r: the ddgs %s search and the backup both"
+                    " returned zero results",
+                    query,
+                    self.mode_for(query),
+                )
+            return reranked
+        if not results and self.backup is None:
+            logger.warning(
+                "no results for %r: the ddgs %s search returned zero results and no"
+                " backup is configured",
+                query,
+                self.mode_for(query),
+            )
         return results
 
     async def _preferred_hits(self, query: str, sites: list[PreferredSite]) -> list[SearchResult]:
@@ -524,8 +539,15 @@ class Searcher:
             with self._factory() as ddgs:
                 hits = ddgs.text(site_query, **kwargs)
                 return [SearchResult.from_ddgs(hit, "preferred") for hit in hits]
-        except Exception:  # noqa: BLE001 - site search failure is not fatal
-            logger.debug("site search failed for %r", site_query)
+        except Exception as exc:  # noqa: BLE001 - site search failure is not fatal
+            # A preferred-source miss is not a failure, so this stays DEBUG, but
+            # it names the exception so a broken seam is still distinguishable.
+            logger.debug(
+                "site search failed for %r: %s: %s",
+                site_query,
+                type(exc).__name__,
+                exc,
+            )
             return []
 
     async def _backup_search(self, query: str) -> list[SearchResult]:
@@ -541,8 +563,16 @@ class Searcher:
         # Broad on purpose: the backup is the last resort in a search that has
         # already failed. `FirecrawlSearch` never raises, so this only fires for a
         # seam that is mis-wired — and a failed backup is still not fatal.
-        except Exception:  # noqa: BLE001 - a failed backup is still not fatal
-            logger.debug("backup search failed for %r", query)
+        except Exception as exc:
+            # Was DEBUG: the last resort of an already-failed search must be
+            # visible in a log the user would think to read.
+            logger.warning(
+                "backup search failed for %r: %s: %s",
+                query,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
             return []
         return list(hits)
 
@@ -565,9 +595,36 @@ class Searcher:
             with self._factory() as ddgs:
                 try:
                     hits = call(ddgs, limit)
-                except (RatelimitException, TimeoutException):
-                    pass  # retried below, once wider
-                except Exception:  # noqa: BLE001 - a failed search is not fatal
+                except (RatelimitException, TimeoutException) as exc:
+                    # A swallowed rate limit was indistinguishable from an empty
+                    # answer, so name the exception and say what happens next.
+                    if attempt < self.max_retries:
+                        logger.warning(
+                            "ddgs %s search rate-limited (%s: %s), retrying wider (timelimit %r)",
+                            origin,
+                            type(exc).__name__,
+                            exc,
+                            widen_timelimit(limit),
+                            exc_info=True,
+                        )
+                    else:
+                        logger.warning(
+                            "ddgs %s search rate-limited (%s: %s): the wider retry"
+                            " also failed after %d attempt(s)",
+                            origin,
+                            type(exc).__name__,
+                            exc,
+                            attempt + 1,
+                            exc_info=True,
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "ddgs %s search failed: %s: %s",
+                        origin,
+                        type(exc).__name__,
+                        exc,
+                        exc_info=True,
+                    )
                     return []
                 else:
                     return [SearchResult.from_ddgs(hit, origin) for hit in hits]

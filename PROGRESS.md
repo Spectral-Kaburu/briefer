@@ -2673,3 +2673,27 @@ Fixed issues discovered after ruff formatting corrupted `cli.py` and `ask.py`:
 
 All changes verified with `make check` → 796 passed, 10 deselected, ruff clean.
 
+
+## Phase 14 — Failure visibility (2026-11-11)
+
+The owner's NVIDIA-configured ask run produced only "Model returned no answer; returning passages instead." Root cause was T13's `OpenAI.generate`: `if not api_key and self.base_url:` dropped the configured `base_url` whenever a key was set, so the real key went to `api.openai.com`, got a 401, and `_generate`'s `except Exception` swallowed it. Fixed by always passing `base_url` (T14.0); regression test RED-proven (no `base_url` in the constructor kwargs) and the constructor kwargs verified live: `{'api_key': 'nvapi-fake-k…', 'base_url': 'https://integrate.api.nvidia.com/v1'}`.
+
+The owner's follow-up was the general problem: every degradation path failing silently. Work split across five slices (synth, fetch/local, fetch/api, search, ask) with one owner for cross-cutting integration. **841 passed** at close (768 at Phase 11 close-out; +73 tests).
+
+- **synth** — `_generate` logs WARNING with provider + model + cause on exception, empty text, whitespace-only, and MAX_TOKENS; also names a missing `openai` extra and a failing SDK constructor. `exc_info=True` on the exception paths.
+- **fetch/local** — scrape transport failures and non-2xx name the URL, the instance, the exception class or the status + Firecrawl code; `health` and the backup search's non-2xx warn with the `docker compose up -d` fix hint.
+- **fetch/api** — no-key (names the env var), the daily cap, the refusal that disables the run (status + code), and transport errors. The key value appears in no record (defence-in-depth test).
+- **search** — a swallowed `RatelimitException`/`TimeoutException` names itself and the wider retry; the exhausted retry says both attempts failed; generic ddgs errors, a failed backup (was DEBUG), and a zero-result search name the query.
+- **ask** — the three user warnings carry the cause: both provider env vars, `finish_reason` + visible tokens, and the provider by name (`model via openai`, resolved through `__name__` so a closure does not print as "function").
+
+Two things the owner asked for or that the slices surfaced, handled here:
+
+1. **Local Firecrawl down is now a run-level fact (T14.4).** A dead instance showed the same "not reachable" line on *every* card, was absent from the footer, and invisible to `--json`. `Report.local_down` (set when any page classified `LOCAL_DOWN`) drives one footer notice — `local Firecrawl is not running (docker compose up -d)` — a `--json` `local_down: true`, and a tests-visible flag. A pre-flight health check in `_begin` was rejected: the T8.1 guard blocks real sockets in CLI tests, so it would have poisoned the whole suite.
+
+2. **Test isolation round two (T14.5), found because of this phase.** `make check` was red with `exc_info` None in three modules' new tests, yet green in isolation. `log.configure` mutates the global `briefing` logger, and `SecretFilter` rewrites records *in place* (renders `exc_info` into `exc_text`, then clears it) — so a handler left by one module strips the traceback off every later `briefing.*` WARNING before `caplog`'s root handler sees the same record, and `propagate=False` hides them from it. Per-file bisection found `test_cli.py` and `test_log.py` as the main leakers (real CLI invocations and `configure()` calls on the shared logger); per-module fixtures were whack-a-mole, so the snapshot/restore is now one autouse fixture in `tests/conftest.py` for every test. Visible failure modes were identical before and after this phase — it is a latent bug this phase's assertions exposed.
+
+**Live verification with a dead local instance** (`base_url: http://localhost:3999`, live ddgs): research reports `3 found · 3 snippet-only · local Firecrawl is not running (docker compose up -d) · 2.0s`, `--json` carries `"local_down": true`. Ask mode still answers from search snippets and shows the model warning.
+
+**Live caveat, not fixed**: `BRIEFING_LIVE=1` runs of the real ddgs tests flake on rate limiting — the same query returns 7 hits, then 0 on an immediate repeat with identical parameters. `search.py:503`'s new zero-results warning names this case ("the ddgs text search returned zero results and no backup is configured") without fixing ddgs's throttling, which is a live-network property, not a code defect. `make check` never runs live tests.
+
+**What the owner must still do**: supply `OPENAI_API_KEY`/`GEMINI_API_KEY` to exercise the model paths (this phase has no key, so all model tests are fakes); keep `BRIEFING_LIVE=1` runs spaced out, or accept the ddgs rate-limit flakes as environmental.

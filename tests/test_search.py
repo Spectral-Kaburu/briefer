@@ -517,6 +517,125 @@ def test_no_backup_configured_logs_nothing_about_trying_one(
     ]
 
 
+def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.message for r in caplog.records if r.levelno == logging.WARNING]
+
+
+# --- every swallow path now says what and why ----------------------------
+
+
+def test_a_rate_limited_ddgs_warns_that_the_wider_retry_follows(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A swallowed RatelimitException was invisible: the reader had no way to
+    tell a rate limit from an empty answer. The warning names the exception and
+    says a wider retry follows, so the widening is not a mystery either.
+    """
+    fake = FakeDDGS(news=[NEWS_HIT], news_raises=RatelimitException("slow down"), news_failures=1)
+    searcher = _searcher(ddgs_factory=lambda: fake, backoff_s=0)
+    with caplog.at_level(logging.WARNING, logger="briefing.search"):
+        assert asyncio.run(searcher.search("latest flooding"))
+    assert [r.exc_info for r in caplog.records if r.levelno == logging.WARNING]
+    assert "RatelimitException" in _warnings(caplog)[0]
+
+
+def test_an_exhausted_retry_budget_says_the_wider_attempt_also_failed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When the wider retry is spent, the log must say both attempts failed, not
+    just repeat the first rate limit as if it were the only thing that happened.
+    """
+    fake = FakeDDGS(news=[], news_raises=RatelimitException("slow down"))
+    backup = FakeFirecrawlSearch(results=[SEARCH_HIT])
+    searcher = _searcher(ddgs_factory=lambda: fake, backup=backup, backoff_s=0, max_retries=2)
+    with caplog.at_level(logging.WARNING, logger="briefing.search"):
+        assert asyncio.run(searcher.search("latest flooding"))
+    exhausted = [m for m in _warnings(caplog) if "also failed" in m]
+    assert exhausted, _warnings(caplog)
+
+
+def test_an_unexpected_ddgs_error_names_the_class_and_message(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The generic except swallowed the class and message, so a mis-wired ddgs
+    and a genuine outage looked identical (empty search, no reason).
+    """
+    fake = FakeDDGS(news=[], news_raises=RuntimeError("boom"))
+    searcher = _searcher(ddgs_factory=lambda: fake, backoff_s=0)
+    with caplog.at_level(logging.WARNING, logger="briefing.search"):
+        assert asyncio.run(searcher.search("latest flooding")) == []
+    warning = _warnings(caplog)[0]
+    assert "RuntimeError" in warning
+    assert "boom" in warning
+    assert "ddgs" in warning
+
+
+def test_a_failed_backup_search_warns_naming_the_exception(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed backup was DEBUG, so the last resort of an already-failed
+    search vanished from any log the user would think to read.
+    """
+    fake = FakeDDGS(news=[], news_raises=RuntimeError("boom"))
+    backup = FakeFirecrawlSearch(raises=httpx.ConnectError("refused"))
+    searcher = _searcher(ddgs_factory=lambda: fake, backup=backup, backoff_s=0)
+    with caplog.at_level(logging.WARNING, logger="briefing.search"):
+        assert asyncio.run(searcher.search("latest flooding")) == []
+    assert any(
+        "ConnectError" in warning and "backup" in warning for warning in _warnings(caplog)
+    ), _warnings(caplog)
+    assert any(r.exc_info for r in caplog.records if r.levelno == logging.WARNING)
+
+
+def test_zero_results_from_both_sources_warns_with_the_query(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Both paths returning nothing used to hand ask/research an empty list with
+    no trace of why; the log must name the query that came up dry.
+    """
+    empty = FakeDDGS(news=[])
+    searcher = _searcher(ddgs_factory=lambda: empty, backup=FakeFirecrawlSearch(), backoff_s=0)
+    with caplog.at_level(logging.WARNING, logger="briefing.search"):
+        assert asyncio.run(searcher.search("latest flooding")) == []
+    warnings = _warnings(caplog)
+    assert "latest flooding" in warnings[-1]
+
+
+def test_a_successful_retry_warns_only_about_the_swallowed_rate_limit(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A search that succeeded on the wider retry must not also claim it failed."""
+    fake = FakeDDGS(news=[NEWS_HIT], news_raises=RatelimitException("slow down"), news_failures=1)
+    searcher = _searcher(ddgs_factory=lambda: fake, backoff_s=0)
+    with caplog.at_level(logging.WARNING, logger="briefing.search"):
+        assert asyncio.run(searcher.search("latest flooding"))
+    assert len(_warnings(caplog)) == 1
+
+
+def test_a_failed_site_search_still_debugs_but_names_the_class(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A preferred-source miss is not a failure, so it stays DEBUG — but the
+    message names the exception so a broken seam is distinguishable.
+    """
+    site = PreferredSite(domain="python.org", topics=("python",))
+    fake = FakeDDGS(text=[], text_raises=RatelimitException("slow down"))
+    searcher = _searcher(ddgs_factory=lambda: fake, backoff_s=0, preferred=[site])
+    with caplog.at_level(logging.DEBUG, logger="briefing.search"):
+        asyncio.run(searcher.search("python programming"))
+    debug = [r.message for r in caplog.records if r.levelno == logging.DEBUG]
+    assert [m for m in debug if "RatelimitException" in m], debug
+
+
+def test_a_successful_search_emits_no_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """Only visibility is added: the happy path stays quiet."""
+    fake = FakeDDGS(news=[NEWS_HIT])
+    searcher = _searcher(ddgs_factory=lambda: fake, backoff_s=0)
+    with caplog.at_level(logging.WARNING, logger="briefing.search"):
+        assert asyncio.run(searcher.search("latest flooding"))
+    assert not _warnings(caplog), _warnings(caplog)
+
+
 def test_both_fail_returns_empty(fake: FakeDDGS) -> None:
     backup = FakeFirecrawlSearch(raises=httpx.ConnectError("refused"))
     searcher = _searcher(

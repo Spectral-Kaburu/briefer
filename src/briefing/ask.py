@@ -267,7 +267,13 @@ async def ask(
     prompt = _build_prompt(query, sources_data, resolve_clock)
 
     if model is None:
-        warnings.append("No Gemini API key found; returning passages only.")
+        logger.warning(
+            "No LLM API key configured; answering from passages only (query=%r)",
+            query,
+        )
+        warnings.append(
+            "No LLM API key found (set OPENAI_API_KEY or GEMINI_API_KEY); returning passages only."
+        )
         text = _render_passages(sources_data)
         used_llm = False
     else:
@@ -275,16 +281,37 @@ async def ask(
         emit("model")
         result = await model(prompt, query)
 
+        # Which model failed, so the warning and the log can name it: the seam is a
+        # plain callable, so prefer its `__name__` (a wrapper function has one) and
+        # fall back to the class name for a bound object.
+        model_name = getattr(model, "__name__", None) or type(model).__name__
+
         # T12.2: the model hands back a ModelResult, or an old-style plain string
         if isinstance(result, ModelResult):
             text, finish_reason = result.text, result.finish_reason
         else:
             text, finish_reason = result, None
         if text and finish_reason and "MAX_TOKENS" in str(finish_reason):
-            warnings.append("The model's answer was cut off; returning passages instead.")
+            tokens = _visible_tokens(result)
+            visible = f" ({tokens} tokens)" if tokens is not None else ""
+            logger.warning(
+                "Ask model %s was cut off (finish_reason=%s) for query=%r; showing passages",
+                model_name,
+                finish_reason,
+                query,
+            )
+            warnings.append(
+                f"The model's answer was cut off (finish_reason={finish_reason}{visible}); "
+                "returning passages instead."
+            )
             text = None
         elif text is None:
-            warnings.append("Model returned no answer; returning passages instead.")
+            logger.warning(
+                "Ask model %s returned no answer for query=%r; showing passages",
+                model_name,
+                query,
+            )
+            warnings.append(f"No answer from the model ({model_name}); showing passages instead.")
         used_llm = text is not None
         if text is None:
             text = _render_passages(sources_data)
@@ -470,6 +497,15 @@ def _build_prompt(
         query=query,
         body=body,
     )
+
+
+def _visible_tokens(result: ModelResult) -> int | None:
+    """Token count from the model result's usage, when it reported one."""
+    usage = result.usage
+    if not usage:
+        return None
+    tokens = usage.get("visible_tokens")
+    return tokens if isinstance(tokens, int) else None
 
 
 def _render_passages(sources: list[EvidenceSource]) -> str:

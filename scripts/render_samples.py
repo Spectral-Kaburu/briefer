@@ -275,7 +275,9 @@ Applications include image recognition, natural language processing, and predict
             ),
         ],
         timings={"search": 0.32, "fetch": 0.91},
-        warnings=["No Gemini API key found; returning passages only."],
+        warnings=[
+            "No LLM API key found (set OPENAI_API_KEY or GEMINI_API_KEY); returning passages only."
+        ],
     ),
     "A3. Sources disagree (clearly stated)": Answer(
         question="What version of Python is stable?",

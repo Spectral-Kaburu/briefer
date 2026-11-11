@@ -252,7 +252,7 @@ async def _ask_implementation(
     model: t.Callable[[str, str], t.Awaitable[str | None]] | None = None
 
     if llm_result[0] is not None:
-        llm, _provider_name = llm_result
+        llm, provider_name = llm_result
 
         async def _model(prompt: str, query: str) -> ModelResult:
             """Call the LLM model and return ModelResult with metadata."""
@@ -261,6 +261,10 @@ async def _ask_implementation(
             except Exception:  # noqa: BLE001
                 return ModelResult(text=None, finish_reason=None, usage=None)
 
+        # Named for the *provider*, because that is the actionable half of an
+        # ask-mode failure: a `_model` closure name says nothing to whoever reads
+        # the footer, while "openai" says which key to check.
+        _model.__name__ = f"model via {provider_name}"
         model = _model
 
     # Create knowledge adapters if enabled (respect no_knowledge override)
@@ -374,12 +378,16 @@ def _configure_logging(loaded: Config, verbose: bool) -> None:
     """
     firecrawl_key = resolve_api_key(loaded, os.environ)
     gemini_key = resolve_gemini_key(loaded, os.environ)
+    openai_key = resolve_openai_key(loaded, os.environ)
     # Stack Exchange key: read from env at call time (knowledge adapter pattern)
     stackexchange_key = os.environ.get(loaded.knowledge.stackexchange_key_env, "") or None
+    # Every key the run can hold, not just the ones this module resolves itself:
+    # a 401 body or a traceback quoting a request echoes the Authorization value,
+    # and SecretFilter can only mask what it was given.
     configure_logging(
         log_file=loaded.paths.log_file,
         verbose=verbose,
-        secrets=[k for k in (firecrawl_key, gemini_key, stackexchange_key) if k],
+        secrets=[k for k in (firecrawl_key, gemini_key, openai_key, stackexchange_key) if k],
     )
 
 
@@ -1052,6 +1060,9 @@ def _as_json(report: Report, answer: str | None = None) -> dict[str, t.Any]:
         "succeeded": report.succeeded,
         "elapsed_s": report.elapsed_s,
         "whitelisted": [[domain, reason] for domain, reason in report.whitelisted],
+        # SPEC section 4's local-down row, as one flag rather than a repeat of the
+        # same reason on every result, so a consumer sees it once and can act on it.
+        "local_down": report.local_down,
         "results": [
             {
                 "rank": result.rank,

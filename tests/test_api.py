@@ -7,6 +7,7 @@ never written to a real log.
 from __future__ import annotations
 
 import json
+import logging
 
 import httpx
 import pytest
@@ -218,6 +219,145 @@ async def test_disable_holds_under_concurrent_refusals(client: ApiFirecrawl) -> 
         *(client.scrape(f"https://example.com/{i}", reason="barrier") for i in range(5))
     )
     assert not client.can_use()
+
+
+# --- degraded paths must say what and why (T11.x) --------------------------
+
+
+def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.message for r in caplog.records if r.levelno == logging.WARNING]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_refusal_says_the_http_status_and_error_code(
+    client: ApiFirecrawl, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A refusal that disables the API for the run must be visible, not silent."""
+    respx.post(f"{BASE}/v2/scrape").mock(
+        return_value=httpx.Response(402, json={"code": "insufficient_credits"})
+    )
+    with caplog.at_level(logging.WARNING, logger="briefing.fetch.api"):
+        await client.scrape("https://example.com/paywalled", reason="barrier")
+    warnings = _warnings(caplog)
+    assert warnings, f"no WARNING was emitted: {[r.message for r in caplog.records]}"
+    message = warnings[0]
+    assert "402" in message
+    assert "insufficient_credits" in message
+    assert "https://example.com/paywalled" in message
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_refusal_without_an_error_code_still_names_the_status(
+    client: ApiFirecrawl, caplog: pytest.LogCaptureFixture
+) -> None:
+    respx.post(f"{BASE}/v2/scrape").mock(return_value=httpx.Response(429, text="Rate limited"))
+    with caplog.at_level(logging.WARNING, logger="briefing.fetch.api"):
+        await client.scrape("https://example.com/x", reason="barrier")
+    assert "429" in _warnings(caplog)[0]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_transport_error_says_what_raised(
+    client: ApiFirecrawl, caplog: pytest.LogCaptureFixture
+) -> None:
+    respx.post(f"{BASE}/v2/scrape").mock(side_effect=httpx.ConnectError("conn refused"))
+    with caplog.at_level(logging.WARNING, logger="briefing.fetch.api"):
+        result = await client.scrape("https://example.com/offline", reason="barrier")
+    assert not result.ok
+    message = _warnings(caplog)[0]
+    assert "ConnectError" in message
+    assert "conn refused" in message
+    assert "https://example.com/offline" in message
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_transport_error_leaves_the_traceback_for_the_log_file(
+    client: ApiFirecrawl, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The contract: exception paths pass `exc_info=True` so the traceback
+    reaches the log file."""
+    respx.post(f"{BASE}/v2/scrape").mock(side_effect=httpx.ConnectError("conn refused"))
+    with caplog.at_level(logging.WARNING, logger="briefing.fetch.api"):
+        await client.scrape("https://example.com/offline", reason="barrier")
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings and all(r.exc_info for r in warnings), [
+        (r.message, r.exc_info) for r in warnings
+    ]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_cap_warns_and_names_the_daily_limit(
+    client: ApiFirecrawl, caplog: pytest.LogCaptureFixture
+) -> None:
+    respx.post(f"{BASE}/v2/scrape").mock(return_value=httpx.Response(200, json=_ok()))
+    for i in range(3):
+        await client.scrape(f"https://example.com/{i}", reason="barrier")
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="briefing.fetch.api"):
+        result = await client.scrape("https://capped.example", reason="barrier")
+    assert not result.ok
+    message = _warnings(caplog)[0]
+    assert "daily API limit" in message
+    assert f"{client.daily_limit}" in message
+    assert "https://capped.example" in message
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_disabled_api_warns_before_staying_silent(
+    client: ApiFirecrawl, caplog: pytest.LogCaptureFixture
+) -> None:
+    respx.post(f"{BASE}/v2/scrape").mock(return_value=httpx.Response(402, text="no credits"))
+    await client.scrape("https://example.com/first", reason="barrier")
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="briefing.fetch.api"):
+        result = await client.scrape("https://example.com/second", reason="barrier")
+    assert not result.ok
+    message = _warnings(caplog)[0]
+    assert "refused" in message
+    assert "https://example.com/second" in message
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_missing_key_warns_with_the_env_var_name(
+    tmp_path: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    from pathlib import Path
+
+    keyless = ApiFirecrawl(
+        base_url=BASE,
+        api_key=None,
+        daily_limit=3,
+        log_path=Path(str(tmp_path)) / "api_calls.jsonl",
+    )
+    with caplog.at_level(logging.WARNING, logger="briefing.fetch.api"):
+        result = await keyless.scrape("https://example.com/x", reason="barrier")
+    assert not result.ok
+    message = _warnings(caplog)[0]
+    assert "FIRECRAWL_API_KEY" in message
+    assert "https://example.com/x" in message
+
+
+def test_the_key_never_appears_in_any_warning(
+    caplog: pytest.LogCaptureFixture, tmp_path: object
+) -> None:
+    """SECURITY: warnings must stay as keyless as the JSONL call log."""
+    from pathlib import Path
+
+    keyed = ApiFirecrawl(
+        base_url=BASE,
+        api_key=KEY,
+        daily_limit=3,
+        log_path=Path(str(tmp_path)) / "log.jsonl",
+    )
+    assert keyed._require_key() == KEY
+    assert not [r for r in caplog.records if KEY in r.message]
 
 
 # --- missing key -----------------------------------------------------------

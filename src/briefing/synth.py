@@ -23,8 +23,11 @@ fallback is the spec'd behaviour rather than an error.
 from __future__ import annotations
 
 import dataclasses
+import logging
 import typing as t
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "prompts" / "briefing.txt"
 
@@ -127,9 +130,6 @@ class Gemini:
 
         Logs finish_reason and usage at DEBUG (visible with --verbose).
         """
-        import logging
-
-        logger = logging.getLogger(__name__)
         import os
 
         from google import genai  # lazy: the extra is optional (pyproject)
@@ -200,12 +200,22 @@ class OpenAI:
         explicit `api_key` parameter, so any precedence rules in the OpenAI SDK
         cannot surprise anyone.
         """
-        import logging
-
-        logger = logging.getLogger(__name__)
         import os
 
-        from openai import AsyncOpenAI  # lazy: the extra is optional
+        try:
+            from openai import AsyncOpenAI  # lazy: the extra is optional
+        except ImportError as exc:
+            logger.warning(
+                "OpenAI: the 'openai' package is not installed, so the model at %s "
+                "(model %s) cannot be called; install the 'llm' extra "
+                "(pip install 'briefing[llm]') to enable it (%s: %s)",
+                self.base_url,
+                self.model,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
+            raise
 
         api_key = os.environ.get(self.api_key_env, "")
         if self._client is None:
@@ -216,7 +226,21 @@ class OpenAI:
             # swallow-all caller turns into "no answer; returning passages".
             if self.base_url:
                 client_kwargs["base_url"] = self.base_url
-            self._client = AsyncOpenAI(**client_kwargs)
+            try:
+                self._client = AsyncOpenAI(**client_kwargs)
+            except Exception as exc:
+                logger.warning(
+                    "OpenAI: building the client for %s (model %s) failed: %s: %s; "
+                    "check that the endpoint is reachable and the API key is set in "
+                    "%s",
+                    self.base_url,
+                    self.model,
+                    type(exc).__name__,
+                    exc,
+                    self.api_key_env,
+                    exc_info=True,
+                )
+                raise
 
         response = await self._client.chat.completions.create(
             model=self.model,
@@ -292,6 +316,25 @@ class Speaker:
         return SpokenBriefing(text, fallback=False)
 
 
+def _provider_and_model(gemini: t.Any) -> tuple[str, str]:
+    """Which provider `gemini` is, and the model name it is set to use.
+
+    The class name is the provider for the two clients that ship here, so a log
+    line reads "Gemini model gemini-2.5-flash failed: ..." without a config
+    lookup. A fake is named for what it stands for rather than "object": the
+    log is read to find which client was in play, not which class was called.
+
+    The model comes from the client, never from the key: the key is the one
+    value that must not reach a message (CLAUDE.md), and the model name is what
+    tells the reader which quota or token cap is the problem.
+    """
+    provider = type(gemini).__name__
+    model = getattr(gemini, "model", None)
+    if not isinstance(model, str) or not model:
+        model = "unknown"
+    return provider, model
+
+
 async def _generate(gemini: t.Any, prompt: t.Callable[[], str]) -> str | None:
     """The model's usable text for the prompt `prompt()` builds, or None.
 
@@ -300,13 +343,19 @@ async def _generate(gemini: t.Any, prompt: t.Callable[[], str]) -> str | None:
     and section 2's `--llm` degrade the same way: a model that raises, returns
     nothing, or returns only whitespace is a model that said nothing.
 
+    Every one of those degradations says so at WARNING before it returns the
+    degraded value: which provider and model was called, and what it actually
+    did — the exception class and message, a `finish_reason` that was unusable,
+    or the fact that the answer arrived empty. A silent fallback reads as "the
+    model had nothing to say", which is indistinguishable from a 401, a quota
+    cap and a lost network in the log. Only the model name is logged: the key
+    is never part of this module's messages.
+
     Building the prompt is inside the try for the same reason — a lost
     `prompts/briefing.txt` is a repo that cannot speak a briefing, which is the
     greeting, not a crash.
     """
-    import logging
-
-    logger = logging.getLogger(__name__)
+    provider, model = _provider_and_model(gemini)
     try:
         result = await gemini.generate(prompt())
         # Handle both old-style (str | None) and new-style (ModelResult) returns
@@ -316,7 +365,11 @@ async def _generate(gemini: t.Any, prompt: t.Callable[[], str]) -> str | None:
             # T12.2: Check for truncated responses (MAX_TOKENS, etc.)
             if finish_reason and "MAX_TOKENS" in str(finish_reason):
                 logger.warning(
-                    "Model answer was cut off (finish_reason=%s); falling back to passages",
+                    "%s model %s was cut off (finish_reason=%s), so there is no usable "
+                    "answer; lowering the token cap or asking for a shorter answer "
+                    "lets it finish",
+                    provider,
+                    model,
                     finish_reason,
                 )
                 return None
@@ -324,9 +377,24 @@ async def _generate(gemini: t.Any, prompt: t.Callable[[], str]) -> str | None:
             # Old-style return
             text = result
         if text is None or not text.strip():
+            logger.warning(
+                "%s model %s returned no text (empty or whitespace-only), so there is "
+                "nothing to fall back to but the summary already on the result; if this "
+                "keeps happening, raise the token cap or check the model's health",
+                provider,
+                model,
+            )
             return None
         return str(text).strip()
-    except Exception:  # noqa: BLE001 - any failure degrades, never raises
+    except Exception as exc:  # any failure degrades, never raises
+        logger.warning(
+            "%s model %s failed: %s: %s",
+            provider,
+            model,
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
         return None
 
 

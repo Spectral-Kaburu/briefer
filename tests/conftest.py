@@ -22,6 +22,7 @@ network, and `make live` runs it.
 from __future__ import annotations
 
 import asyncio
+import logging
 import multiprocessing
 import os
 import pty
@@ -31,6 +32,8 @@ import typing as t
 from pathlib import Path
 
 import pytest
+
+from briefing.log import ROOT
 
 #: Blocked attempts from the test currently running. The teardown reads it.
 blocked: list[str] = []
@@ -219,6 +222,28 @@ def _restore() -> None:
 def _is_live(request: pytest.FixtureRequest) -> bool:
     """True when the test is marked `live` and may reach the real network."""
     return bool(request.node.get_closest_marker("live"))
+
+
+@pytest.fixture(autouse=True)
+def _restore_the_briefing_logger() -> t.Iterator[None]:
+    """Snapshot and restore `briefing`'s logger, because it is global state.
+
+    `log.configure` — which every real CLI invocation reaches through
+    `_configure_logging` — clears the logger's handlers, sets `propagate=False`,
+    and hands every new handler a `SecretFilter`. The filter rewrites records
+    *in place*: it renders `exc_info` into `exc_text`, then clears it. So a
+    handler one test leaves attached strips the traceback off every later
+    `briefing.*` WARNING before `caplog`'s root handler sees the same record,
+    and `propagate=False` hides those records from it entirely. Tests that
+    assert on `record.exc_info` then fail depending on which module ran first,
+    which is exactly how this was found: invisible in isolation, red in the
+    suite. Per-module fixes were whack-a-mole — every module that invokes the
+    real CLI leaks the same way — so the guard is here, for every test.
+    """
+    logger = logging.getLogger(ROOT)
+    saved = (list(logger.handlers), logger.level, logger.propagate)
+    yield
+    logger.handlers, logger.level, logger.propagate = saved
 
 
 @pytest.fixture(autouse=True)

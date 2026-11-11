@@ -91,13 +91,15 @@ def _result() -> Result:
     )
 
 
-def _report() -> Report:
-    return Report(
-        results=[_result()],
-        found=1,
-        elapsed_s=6.4,
-        whitelisted=[("example.co.ke", "captcha")],
-    )
+def _report(**kwargs: t.Any) -> Report:
+    base: dict[str, t.Any] = {
+        "results": [_result()],
+        "found": 1,
+        "elapsed_s": 6.4,
+        "whitelisted": [("example.co.ke", "captcha")],
+    }
+    base.update(kwargs)
+    return Report(**base)
 
 
 # --- help -----------------------------------------------------------------
@@ -565,6 +567,37 @@ def test_json_output_carries_the_reason_a_page_degraded(monkeypatch: t.Any) -> N
     _configure(report, monkeypatch)
     payload = json.loads(runner.invoke(app, ["research", "kenya news", "--json"]).stdout)
     assert payload["results"][1]["warning"] == "page not found (HTTP 404)"
+
+
+def test_json_output_names_local_firecrawl_down_once(monkeypatch: t.Any) -> None:
+    """SPEC section 4: the one failure worth a run-level flag rather than N copies."""
+    report = _report(local_down=True)
+    report.results = [
+        dataclasses.replace(
+            _result(),
+            rank=1,
+            method=Method.SNIPPET,
+            ok=False,
+            warning="local Firecrawl is not reachable; start it with docker compose up -d",
+        ),
+        dataclasses.replace(
+            _result(),
+            rank=2,
+            domain="example.co.ke",
+            method=Method.SNIPPET,
+            ok=False,
+            warning="local Firecrawl is not reachable; start it with docker compose up -d",
+        ),
+    ]
+    _configure(report, monkeypatch)
+    payload = json.loads(runner.invoke(app, ["research", "kenya news", "--json"]).stdout)
+    assert payload["local_down"] is True
+
+
+def test_json_output_has_no_local_down_flag_when_it_was_up(monkeypatch: t.Any) -> None:
+    _configure(_report(), monkeypatch)
+    payload = json.loads(runner.invoke(app, ["research", "kenya news", "--json"]).stdout)
+    assert payload["local_down"] is False
 
 
 # --- plain ---------------------------------------------------------------

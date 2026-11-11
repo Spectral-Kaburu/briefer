@@ -310,8 +310,8 @@ example.org
 Applications include image recognition, natural language processing, and predictive analytics.
 https://example.org/ml-apps
                                                                                                     
-  2 local · 2 sources (passages) ·  · search: 0.32s · fetch: 0.91s ·  · No Gemini API key found;    
-  returning passages only.                                                                          
+  2 local · 2 sources (passages) ·  · search: 0.32s · fetch: 0.91s ·  · No LLM API key found (set   
+  OPENAI_API_KEY or GEMINI_API_KEY); returning passages only.                                       
                                                                                                     
 
 ====================================================================================================

@@ -211,6 +211,10 @@ def footer(report: Report, *, plain: bool = False) -> Panel:
     if report.whitelisted:
         listed = ", ".join(f"{domain}: {reason}" for domain, reason in report.whitelisted)
         parts.append(f"whitelist +{len(report.whitelisted)} ({listed})")
+    if report.local_down:
+        # The one failure worth naming once: every card repeats the same reason,
+        # and the fix is a single action rather than one per page.
+        parts.append("local Firecrawl is not running (docker compose up -d)")
     parts.append(f"{report.elapsed_s:.1f}s")
     return _footer_panel(parts)
 

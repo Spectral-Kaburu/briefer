@@ -286,3 +286,19 @@ The owner requested adding OpenAI API as an alternative LLM provider alongside G
 - [x] **T13.5** Add tests for `resolve_openai_key()` and `OpenAI` class
 - [x] **T13.6** Add tests for provider selection logic with `preferred_provider` config
 - [x] **T13.7** Add comprehensive tests for `_selected_llm()` helper function
+
+## Phase 14: Failure visibility (owner's request, 2026-11-11)
+
+**Why this phase exists.** The owner's NVIDIA-configured ask run hit the T13 base_url bug, and the only symptom was a swallowed "Model returned no answer; returning passages instead." Chasing that exposed the wider class problem: every degradation path in the product could fail without saying what failed or why. Phase 14 makes each one speak, and fixes the local-Firecrawl-down surface specifically.
+
+**Order and dependencies.** T14.0 is the verification of the defect this phase grew from. T14.1 to T14.3 are independent code tasks; T14.4 depends on the pipeline/UI change. T14.5 is the isolation leak that only surfaced because T14.1's tests were the first to assert `exc_info` under `caplog`.
+
+- [x] **T14.0** No change. Verify and pin the T13 defect: `OpenAI.generate` dropped a configured `base_url` whenever a key was set, so a real NVIDIA key was sent to `api.openai.com`, answered 401, and `_generate`'s swallow-all turned that into "no answer". *Accept*: test asserting the constructed client carries both `base_url` and `api_key`.
+- [x] **T14.1** Every swallowed model failure logs a WARNING naming the provider, the model (never the key), and the cause: exception class + message, or a `finish_reason` that was unusable, or an empty/whitespace answer. `exc_info=True` on the exception paths so the log file carries the stack. Missing-`openai` extra and a failing SDK constructor are named too. *Accept*: `caplog` tests for each path; a successful call logs nothing.
+- [x] **T14.2** The two Firecrawl clients and `Searcher` do the same: local scrape/health failures name the URL, the instance, the exception class or the HTTP status + code; the API client names the no-key env var, the daily cap, the refusal (which disables the run), and transport errors; ddgs names `RatelimitException`/`TimeoutException`/generic errors, the backup, and a zero-result search. *Accept*: respx and fake-ddgs tests per path; keys appear in no record.
+- [x] **T14.3** Ask mode's three user-facing warnings carry the cause instead of a generic sentence: both provider env vars, the model's `finish_reason` (+ visible tokens), and the provider by name (`model via openai`, not a closure's name). *Accept*: tested per branch.
+- [x] **T14.4** Local Firecrawl down is a run-level fact, not a per-card note. `Report.local_down` (set when any page classified LOCAL_DOWN) drives one footer notice, a `--json` `local_down` flag, and no new socket call (which the T8.1 guard blocks). *Accept*: footer test, both JSON tests, live run with a dead instance.
+- [x] **T14.5** Test isolation, round two: `log.configure` mutates the global `briefing` logger and its `SecretFilter` rewrites records in place, so a handler left by one module strips `exc_info` off every later `briefing.*` WARNING before `caplog` sees it. One autouse snapshot/restore in `tests/conftest.py` for every test; per-module copies removed. *Accept*: `make check` green in any file order.
+- [x] **T14.6** Close-out: make check, live run with a dead local instance recorded, review, PROGRESS.md entry.
+
+Out of scope (owner's call): changing the swallow-and-degrade behaviour itself, retry/backoff changes, new config fields for log levels, and making a dead local instance a hard error rather than a degraded snippet run.
