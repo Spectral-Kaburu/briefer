@@ -234,6 +234,31 @@ def _no_owner_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("BRIEFING_CONFIG", raising=False)
 
 
+#: Env vars that would make a test depend on the machine running the suite: the
+#: owner's model keys, and the live-run switch. A test that wants one sets it
+#: itself (`monkeypatch.setenv` after this fixture), which also documents that it
+#: is not an accident of whoever happens to be at the keyboard.
+_OWNER_ENV = ("OPENAI_API_KEY", "GEMINI_API_KEY", "BRIEFING_LIVE")
+
+
+@pytest.fixture(autouse=True)
+def _no_owner_keys(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """T8.3's env twin: no test reads the owner's keys or runs live by default.
+
+    The suite ran green on the owner's machine and red in CI because
+    `GEMINI_API_KEY` happened to be exported: a test asserting "no key found"
+    found one, and a test exercising the model path exercised *the owner's key*.
+    Scrubbing here means a test sees the environment it asked for, and only that.
+
+    `live` tests are exempt for the same reason `_guard` exempts them: they exist
+    to run against the real services, under `make live`, with the real key set.
+    """
+    if _is_live(request):
+        return
+    for name in _OWNER_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture(autouse=True)
 def _guard(request: pytest.FixtureRequest) -> t.Iterator[None]:
     """Install the guard for every test that is not marked `live`.

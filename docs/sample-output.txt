@@ -2,10 +2,10 @@
 ========================
 
 Five runs rendered through the real `briefing.ui` renderers (T3.5), at the two
-widths that matter. No network, no pipeline: each scenario is a `Report` handed
-to the same functions `briefing research` calls, so these are the exact bytes the
-UI writes. Regenerate with `scripts/render_samples.py` rather than editing by
-hand.
+widths that matter. No network, no engine: each scenario is a hand-built `Answer`
+handed to the same functions `briefing research` calls, so these are the exact
+bytes the UI writes. Regenerate with `scripts/render_samples.py` rather than
+editing by hand.
 
 Each scenario shows its live progress block (SPEC section 3's one spinner line
 per URL) and then a representative couple of cards; `found` in the footer counts
@@ -35,91 +35,92 @@ Ask mode scenarios (T9.7, T10.7):
 1. All local, all good (the happy path)  [width 100]
 ====================================================================================================
  briefing ▸ research
- Query: "kenya economy"   mode: text
-✔ LOCAL  nation.africa
-✔ LOCAL  businessdaily.africa
+ Query: "kenya economy"
+✔ LOCAL  [1] nation.africa
+✔ LOCAL  [2] businessdaily.africa
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ 1  Kenya's economy grew 5.2% last quarter  LOCAL                                                 │
+│ [1]  Kenya's economy grew 5.2% last quarter  LOCAL                                               │
 │ nation.africa · 2h ago                                                                           │
 │ Kenya's economy grew 5.2 percent last quarter. Agriculture and services drove the expansion.     │
 │ https://nation.africa/kenya/economy-grew                                                         │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ 2  What the shilling's stability means for borrowers  LOCAL                                      │
+│ [2]  What the shilling's stability means for borrowers  LOCAL                                    │
 │ businessdaily.africa · 5h ago                                                                    │
 │ The shilling held steady against the dollar. Borrowers may see relief on dollar-denominated      │
 │ loans.                                                                                           │
 │ https://businessdaily.africa/shilling-stability                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
                                                                                                     
-  5 found · 2 extracted (2 local) · 6.4s                                                            
+  5 found · 2 extracted (2 local) · search 0.8s · fetch 6.4s · 7.2s total                           
                                                                                                     
 
 ================================================================================
 1. All local, all good (the happy path)  [width 80]
 ================================================================================
  briefing ▸ research
- Query: "kenya economy"   mode: text
-✔ LOCAL  nation.africa
-✔ LOCAL  businessdaily.africa
+ Query: "kenya economy"
+✔ LOCAL  [1] nation.africa
+✔ LOCAL  [2] businessdaily.africa
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│ 1  Kenya's economy grew 5.2% last quarter  LOCAL                             │
+│ [1]  Kenya's economy grew 5.2% last quarter  LOCAL                           │
 │ nation.africa · 2h ago                                                       │
 │ Kenya's economy grew 5.2 percent last quarter. Agriculture and services      │
 │ drove the expansion.                                                         │
 │ https://nation.africa/kenya/economy-grew                                     │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│ 2  What the shilling's stability means for borrowers  LOCAL                  │
+│ [2]  What the shilling's stability means for borrowers  LOCAL                │
 │ businessdaily.africa · 5h ago                                                │
 │ The shilling held steady against the dollar. Borrowers may see relief on     │
 │ dollar-denominated loans.                                                    │
 │ https://businessdaily.africa/shilling-stability                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
                                                                                 
-  5 found · 2 extracted (2 local) · 6.4s                                        
+  5 found · 2 extracted (2 local) · search 0.8s · fetch 6.4s · 7.2s total       
                                                                                 
 
 ====================================================================================================
 2. A barrier page recovered by the API  [width 100]
 ====================================================================================================
  briefing ▸ research
- Query: "kenya economy"   mode: text
-✔ API  paywalled.example
-✔ LOCAL  nation.africa
+ Query: "kenya economy"
+✔ API  [1] paywalled.example
+✔ LOCAL  [2] nation.africa
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ 1  Paywalled: the full rate decision  API                                                        │
+│ [1]  Paywalled: the full rate decision  API                                                      │
 │ paywalled.example · 1h ago                                                                       │
 │ The committee voted six to one to hold the rate. Inflation expectations were the deciding        │
 │ factor.                                                                                          │
 │ https://paywalled.example/rate-decision                                                          │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ 2  Regional comparison: East African central banks  LOCAL                                        │
+│ [2]  Regional comparison: East African central banks  LOCAL                                      │
 │ nation.africa · 3h ago                                                                           │
 │ Neighbouring central banks took different paths. Kenya held while others tightened.              │
 │ https://nation.africa/regional-banks                                                             │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
                                                                                                     
-  6 found · 2 extracted (1 api, 1 local) · whitelist +1 (paywalled.example: captcha) · 9.1s         
+  6 found · 2 extracted (1 api, 1 local) · whitelist +1 (paywalled.example: captcha) · search 0.8s  
+  · fetch 9.1s · 9.9s total                                                                         
                                                                                                     
 
 ================================================================================
 2. A barrier page recovered by the API  [width 80]
 ================================================================================
  briefing ▸ research
- Query: "kenya economy"   mode: text
-✔ API  paywalled.example
-✔ LOCAL  nation.africa
+ Query: "kenya economy"
+✔ API  [1] paywalled.example
+✔ LOCAL  [2] nation.africa
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│ 1  Paywalled: the full rate decision  API                                    │
+│ [1]  Paywalled: the full rate decision  API                                  │
 │ paywalled.example · 1h ago                                                   │
 │ The committee voted six to one to hold the rate. Inflation expectations were │
 │ the deciding factor.                                                         │
 │ https://paywalled.example/rate-decision                                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│ 2  Regional comparison: East African central banks  LOCAL                    │
+│ [2]  Regional comparison: East African central banks  LOCAL                  │
 │ nation.africa · 3h ago                                                       │
 │ Neighbouring central banks took different paths. Kenya held while others     │
 │ tightened.                                                                   │
@@ -127,112 +128,115 @@ Ask mode scenarios (T9.7, T10.7):
 ╰──────────────────────────────────────────────────────────────────────────────╯
                                                                                 
   6 found · 2 extracted (1 api, 1 local) · whitelist +1 (paywalled.example:     
-  captcha) · 9.1s                                                               
+  captcha) · search 0.8s · fetch 9.1s · 9.9s total                              
                                                                                 
 
 ====================================================================================================
 3. Everything degraded to snippets (local down)  [width 100]
 ====================================================================================================
  briefing ▸ research
- Query: "kenya economy"   mode: text
-✔ SNIPPET  nation.africa
-✔ SNIPPET  businessdaily.africa
+ Query: "kenya economy"
+⚠ SNIPPET  [1] nation.africa
+⚠ SNIPPET  [2] businessdaily.africa
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ 1  Inflation eases to 4.1 percent  SNIPPET                                                       │
+│ [1]  Inflation eases to 4.1 percent  SNIPPET                                                     │
 │ nation.africa                                                                                    │
 │ Food prices fell for a third straight month.                                                     │
 │ https://nation.africa/inflation-eases                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ 2  Analysts split on the next move  SNIPPET                                                      │
+│ [2]  Analysts split on the next move  SNIPPET                                                    │
 │ businessdaily.africa                                                                             │
 │ Half expect a cut by December.                                                                   │
 │ https://businessdaily.africa/analysts-split                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
                                                                                                     
-  4 found · 2 snippet-only · 1.2s                                                                   
+  4 found · 2 snippet-only · search 0.8s · fetch 1.2s · 2.0s total                                  
                                                                                                     
 
 ================================================================================
 3. Everything degraded to snippets (local down)  [width 80]
 ================================================================================
  briefing ▸ research
- Query: "kenya economy"   mode: text
-✔ SNIPPET  nation.africa
-✔ SNIPPET  businessdaily.africa
+ Query: "kenya economy"
+⚠ SNIPPET  [1] nation.africa
+⚠ SNIPPET  [2] businessdaily.africa
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│ 1  Inflation eases to 4.1 percent  SNIPPET                                   │
+│ [1]  Inflation eases to 4.1 percent  SNIPPET                                 │
 │ nation.africa                                                                │
 │ Food prices fell for a third straight month.                                 │
 │ https://nation.africa/inflation-eases                                        │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│ 2  Analysts split on the next move  SNIPPET                                  │
+│ [2]  Analysts split on the next move  SNIPPET                                │
 │ businessdaily.africa                                                         │
 │ Half expect a cut by December.                                               │
 │ https://businessdaily.africa/analysts-split                                  │
 ╰──────────────────────────────────────────────────────────────────────────────╯
                                                                                 
-  4 found · 2 snippet-only · 1.2s                                               
+  4 found · 2 snippet-only · search 0.8s · fetch 1.2s · 2.0s total              
                                                                                 
 
 ====================================================================================================
 4. A hard failure alongside real results  [width 100]
 ====================================================================================================
  briefing ▸ research
- Query: "kenya economy"   mode: text
-✔ LOCAL  nation.africa
-⚠ SNIPPET  gone.example
+ Query: "kenya economy"
+✔ LOCAL  [1] nation.africa
+⚠ SNIPPET  [2] gone.example
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ 1  Central bank statement in full  LOCAL                                                         │
+│ [1]  Central bank statement in full  LOCAL                                                       │
 │ nation.africa · 2h ago                                                                           │
 │ The governor defended the hold on Tuesday. He cited exchange-rate volatility.                    │
 │ https://nation.africa/statement-full                                                             │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ 2  Dead link: page returns 404  SNIPPET                                                          │
+│ [2]  Dead link: page returns 404  SNIPPET                                                        │
 │ gone.example                                                                                     │
 │ page not found (HTTP 404)                                                                        │
 │ A story that has since been removed.                                                             │
 │ https://gone.example/old-story                                                                   │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
                                                                                                     
-  5 found · 1 extracted (1 local) · 1 snippet-only · 7.8s                                           
+  5 found · 1 extracted (1 local) · 1 snippet-only · search 0.8s · fetch 7.8s · 8.6s total          
+  fetch: page not found (HTTP 404)                                                                  
                                                                                                     
 
 ================================================================================
 4. A hard failure alongside real results  [width 80]
 ================================================================================
  briefing ▸ research
- Query: "kenya economy"   mode: text
-✔ LOCAL  nation.africa
-⚠ SNIPPET  gone.example
+ Query: "kenya economy"
+✔ LOCAL  [1] nation.africa
+⚠ SNIPPET  [2] gone.example
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│ 1  Central bank statement in full  LOCAL                                     │
+│ [1]  Central bank statement in full  LOCAL                                   │
 │ nation.africa · 2h ago                                                       │
 │ The governor defended the hold on Tuesday. He cited exchange-rate            │
 │ volatility.                                                                  │
 │ https://nation.africa/statement-full                                         │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│ 2  Dead link: page returns 404  SNIPPET                                      │
+│ [2]  Dead link: page returns 404  SNIPPET                                    │
 │ gone.example                                                                 │
 │ page not found (HTTP 404)                                                    │
 │ A story that has since been removed.                                         │
 │ https://gone.example/old-story                                               │
 ╰──────────────────────────────────────────────────────────────────────────────╯
                                                                                 
-  5 found · 1 extracted (1 local) · 1 snippet-only · 7.8s                       
+  5 found · 1 extracted (1 local) · 1 snippet-only · search 0.8s · fetch 7.8s   
+  · 8.6s total                                                                  
+  fetch: page not found (HTTP 404)                                              
                                                                                 
 
 ====================================================================================================
 5. Long titles, long summaries, narrow and wide terminals  [width 100]
 ====================================================================================================
  briefing ▸ research
- Query: "kenya economy"   mode: text
-✔ API  very-long-domain-name-here.example.co.ke
+ Query: "kenya economy"
+✔ API  [1] very-long-domain-name-here.example.co.ke
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ 1  A long headline that wraps once at eighty columns and shows the continuation line  API        │
+│ [1]  A long headline that wraps once at eighty columns and shows the continuation line  API      │
 │ very-long-domain-name-here.example.co.ke · 4h ago                                                │
 │ The first sentence of this summary is long enough to wrap on its own at a narrow terminal width. │
 │ The second sentence follows it and should hang-indent to match, or the whole card loses its left │
@@ -241,17 +245,17 @@ Ask mode scenarios (T9.7, T10.7):
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
                                                                                                     
   3 found · 1 extracted (1 api) · whitelist +1 (very-long-domain-name-here.example.co.ke: 403       
-  forbidden) · 5.0s                                                                                 
+  forbidden) · search 0.8s · fetch 5.0s · 5.8s total                                                
                                                                                                     
 
 ================================================================================
 5. Long titles, long summaries, narrow and wide terminals  [width 80]
 ================================================================================
  briefing ▸ research
- Query: "kenya economy"   mode: text
-✔ API  very-long-domain-name-here.example.co.ke
+ Query: "kenya economy"
+✔ API  [1] very-long-domain-name-here.example.co.ke
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│ 1  A long headline that wraps once at eighty columns and shows the           │
+│ [1]  A long headline that wraps once at eighty columns and shows the         │
 │ continuation line  API                                                       │
 │ very-long-domain-name-here.example.co.ke · 4h ago                            │
 │ The first sentence of this summary is long enough to wrap on its own at a    │
@@ -261,111 +265,138 @@ Ask mode scenarios (T9.7, T10.7):
 ╰──────────────────────────────────────────────────────────────────────────────╯
                                                                                 
   3 found · 1 extracted (1 api) · whitelist +1                                  
-  (very-long-domain-name-here.example.co.ke: 403 forbidden) · 5.0s              
+  (very-long-domain-name-here.example.co.ke: 403 forbidden) · search 0.8s ·     
+  fetch 5.0s · 5.8s total                                                       
                                                                                 
 
 
 ============================================================
-ASK MODE SCENARIOS (T9.7)
+ASK MODE SCENARIOS
 ============================================================
 
 ====================================================================================================
 A1. Answered with sources (LLM available)  [width 100]
 ====================================================================================================
-╭───────────────────────────────────────────── Answer ─────────────────────────────────────────────╮
+ briefing ▸ research
+ Query: "What is the current Python version?"
+✔ LOCAL  [1] python.org
+✔ LOCAL  [2] python.org
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Answer  ANSWER                                                                                   │
+│ synthesised answer · 2 sources                                                                   │
 │ Python 3.12 is the latest stable release, with Python 3.13 in development.                       │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
-
-[1] Python 3.12 Released  [LOCAL]
-python.org
-Python 3.12 brought many improvements including the new type parameter syntax.
-https://python.org/downloads/
-[2] Python Release Schedule  [LOCAL]
-python.org
-Python 3.13 is currently in the development phase with planned October 2025 release.
-https://python.org/devcycle/
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ [1]  Python 3.12 Released  LOCAL                                                                 │
+│ python.org                                                                                       │
+│ Python 3.12 brought many improvements including the new type parameter syntax.                   │
+│ https://python.org/downloads/                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ [2]  Python Release Schedule  LOCAL                                                              │
+│ python.org                                                                                       │
+│ Python 3.13 is currently in the development phase with planned October 2025 release.             │
+│ https://python.org/devcycle/                                                                     │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
                                                                                                     
-  2 local · 2 sources (LLM) ·  · search: 0.45s · fetch: 1.23s · model: 0.89s                        
+  2 found · 2 extracted (2 local) · search 0.5s · fetch 1.2s · model 0.9s · 2.6s total              
                                                                                                     
 
 ====================================================================================================
 A2. No model available (passages only)  [width 100]
 ====================================================================================================
-╭───────────────────────────────────────────── Answer ─────────────────────────────────────────────╮
-│ [1] Definition of ML                                                                             │
+ briefing ▸ research
+ Query: "What is machine learning?"
+✔ LOCAL  [1] example.org
+✔ LOCAL  [2] example.org
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ [1]  Definition of ML  LOCAL                                                                     │
+│ example.org                                                                                      │
 │ Machine learning is a subset of artificial intelligence that enables computers to learn from     │
 │ data without being explicitly programmed.                                                        │
-│                                                                                                  │
-│ [2] Applications                                                                                 │
-│ Applications include image recognition, natural language processing, and predictive analytics.   │
+│ https://example.org/ml-basics                                                                    │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
-
-[1] Definition of ML  [LOCAL]
-example.org
-Machine learning is a subset of artificial intelligence that enables computers to learn from data 
-without being explicitly programmed.
-https://example.org/ml-basics
-[2] Applications  [LOCAL]
-example.org
-Applications include image recognition, natural language processing, and predictive analytics.
-https://example.org/ml-apps
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ [2]  Applications  LOCAL                                                                         │
+│ example.org                                                                                      │
+│ Applications include image recognition, natural language processing, and predictive analytics.   │
+│ https://example.org/ml-apps                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
                                                                                                     
-  2 local · 2 sources (passages) ·  · search: 0.32s · fetch: 0.91s ·  · No Gemini API key found;    
-  returning passages only.                                                                          
+  2 found · 2 extracted (2 local) · search 0.3s · fetch 0.9s · 1.2s total                           
+  note: No Gemini API key found; returning passages only.                                           
                                                                                                     
 
 ====================================================================================================
 A3. Sources disagree (clearly stated)  [width 100]
 ====================================================================================================
-╭───────────────────────────────────────────── Answer ─────────────────────────────────────────────╮
+ briefing ▸ research
+ Query: "What version of Python is stable?"
+✔ LOCAL  [1] python.org
+✔ LOCAL  [2] techcrunch.com
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Answer  ANSWER                                                                                   │
+│ synthesised answer · 2 sources                                                                   │
 │ Sources disagree: python.org says 3.12.3 is the latest stable, while techcrunch.com says 3.13.0  │
 │ was released.                                                                                    │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
-
-[1] Python 3.12.3 Released  [LOCAL]
-python.org
-Python 3.12.3 is the latest stable release as of today.
-https://python.org/downloads/
-[2] Python 3.13 Ships Ahead of Schedule  [LOCAL]
-techcrunch.com
-Python 3.13.0 was officially released on October 14, 2026, earlier than expected.
-https://techcrunch.com/2026/10/15/python-3-13
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ [1]  Python 3.12.3 Released  LOCAL                                                               │
+│ python.org                                                                                       │
+│ Python 3.12.3 is the latest stable release as of today.                                          │
+│ https://python.org/downloads/                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ [2]  Python 3.13 Ships Ahead of Schedule  LOCAL                                                  │
+│ techcrunch.com                                                                                   │
+│ Python 3.13.0 was officially released on October 14, 2026, earlier than expected.                │
+│ https://techcrunch.com/2026/10/15/python-3-13                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
                                                                                                     
-  2 local · 2 sources (LLM) ·  · search: 0.51s · fetch: 1.45s · model: 0.67s                        
+  2 found · 2 extracted (2 local) · search 0.5s · fetch 1.4s · model 0.7s · 2.6s total              
                                                                                                     
 
 ====================================================================================================
 A4. Knowledge sources (Wiki + SO)  [width 100]
 ====================================================================================================
-╭───────────────────────────────────────────── Answer ─────────────────────────────────────────────╮
+ briefing ▸ research
+ Query: "What is the Python programming language?"
+✔ WIKI  [1] wikipedia.org
+✔ SO  [2] stackoverflow.com
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Answer  ANSWER                                                                                   │
+│ synthesised answer · 2 sources                                                                   │
 │ Python is a high-level, interpreted programming language known for its clear syntax and          │
 │ readability. It was created by Guido van Rossum in 1991 and first released in 1994.              │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
-
-[1] Python (programming language)  [WIKI]
-wikipedia.org
-Python is a high-level, interpreted programming language known for its clear syntax and readability.
-It was created by Guido van Rossum and first released in 1991. Python emphasizes code readability 
-with its notable use of whitespace.
-CC BY-SA 4.0
-https://en.wikipedia.org/wiki/Python_(programming_language)
-[2] How to install Python on Windows  [SO]
-stackoverflow.com
-Download the installer from python.org and run it. Make sure to check 'Add Python to PATH' during 
-installation options. Python 3.12 is the latest stable version as of 2024.
-CC BY-SA 4.0, by Jane Developer
-https://stackoverflow.com/questions/12345/how-to-install-python
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ [1]  Python (programming language)  WIKI                                                         │
+│ wikipedia.org                                                                                    │
+│ CC BY-SA 4.0                                                                                     │
+│ Python is a high-level, interpreted programming language known for its clear syntax and          │
+│ readability. It was created by Guido van Rossum and first released in 1991. Python emphasizes    │
+│ code readability with its notable use of whitespace.                                             │
+│ https://en.wikipedia.org/wiki/Python_(programming_language)                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ [2]  How to install Python on Windows  SO                                                        │
+│ stackoverflow.com                                                                                │
+│ CC BY-SA 4.0                                                                                     │
+│ by Jane Developer                                                                                │
+│ Download the installer from python.org and run it. Make sure to check 'Add Python to PATH'       │
+│ during installation options. Python 3.12 is the latest stable version as of 2024.                │
+│ https://stackoverflow.com/questions/12345/how-to-install-python                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
                                                                                                     
-  2 sources (LLM) ·  · search: 0.35s · fetch: 0.82s                                                 
+  2 found · 2 extracted (1 wiki, 1 so) · search 0.3s · fetch 0.8s · 1.2s total                      
                                                                                                     
 
 ====================================================================================================
 A5. Nothing found (clear error)  [width 100]
 ====================================================================================================
-╭───────────────────────────────────────────── Answer ─────────────────────────────────────────────╮
-│ No sources available to answer the query.                                                        │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
-
+ briefing ▸ research
+ Query: "xyznonexistentquery12345"
                                                                                                     
-  0 sources (passages) ·  · search: 0.01s · fetch: 0.00s ·  · No search results found for query.    
+  0 found · search 0.0s · fetch 0.0s · 0.0s total                                                   
+  note: No search results found for query.                                                          
                                                                                                     

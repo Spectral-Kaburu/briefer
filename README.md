@@ -19,8 +19,10 @@ key fall back to the search snippet rather than failing.
 - Python 3.11+
 - A running **local Firecrawl** at `http://localhost:3002` (see below). Without it
   every result degrades to a snippet, so it is worth starting.
-- Optional: a `FIRECRAWL_API_KEY` for the cloud fallback, and `google-genai`
-  (`pipx install 'briefing[llm]'`) for `--llm` summaries.
+- Optional: a `FIRECRAWL_API_KEY` for the cloud fallback, and a
+  `GEMINI_API_KEY`/`OPENAI_API_KEY` (`pipx install 'briefing[llm]'`) for
+  generated answers. Without a key both modes still work, showing the extracted
+  passages from each page instead.
 
 ## Install
 
@@ -82,8 +84,7 @@ Words like *latest*, *breaking* and *today* switch the search to news mode;
 | `-n`, `--results N` | How many results to fetch |
 | `--time day\|week\|month\|any` | Recency window |
 | `--news` / `--web` | Force the search mode |
-| `--llm` | Gemini summaries instead of extractive |
-| `--synth` | One overall answer built from all summaries |
+| `--no-knowledge` | Skip the Wikipedia / Stack Exchange adapters |
 | `--no-api` | Never spend a cloud API call |
 | `--json` | Emit the report as JSON (for scripts and Aether) |
 | `--plain` / `--no-plain` | Colour off/on (auto when piped) |

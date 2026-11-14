@@ -44,7 +44,8 @@ whitelist:
   prefer_api_for_whitelisted: false
 
 summary:
-  # extractive (offline, instant) or llm (Gemini, opt-in via --llm).
+  # extractive (offline, instant). The card text is always extractive; a model
+  # answer is generated on top of it whenever an API key is configured.
   mode: extractive
   sentences: 2
 
@@ -60,7 +61,9 @@ dedup:
 # Timing bounds (SPEC section 4). Raise them on a slow link, lower them to fail
 # fast; both are only defaults, so delete what you don't need to change.
 timeouts:
-  # Bound on one URL's fetch (local, plus any API retry). 0 means "no bound".
+  # Bound on one URL's fetch. It wraps the local scrape AND the API retry that
+  # follows it, so 30s can cancel a paid API call mid-flight; 75 is the safer
+  # value when an API key is configured. 0 means "no bound".
   per_url_s: 30
   # Pause before the one local retry SPEC allows for a transient 5xx.
   transient_backoff_s: 0.5
@@ -78,7 +81,7 @@ briefing:
   # When both keys are present, this determines which provider to use.
   # Empty means OpenAI is preferred (the default behavior). Set to "gemini" to prefer it.
   preferred_provider: ""
-  # Gemini LLM settings (T9.4): for --llm and --synth modes.
+  # Gemini LLM settings: used by ask and research whenever a key is present.
   gemini:
     # Environment variable holding the Gemini API key.
     api_key_env: GEMINI_API_KEY
@@ -95,14 +98,24 @@ briefing:
     # The model to use for generation.
     model: gpt-4o-mini
 
-# Ask mode configuration (T9.6): for `briefing -a` and `briefing ask`.
+# Ask mode configuration: shared by `briefing ask` and `briefing research`,
+# which are one engine with two profiles.
 ask:
   # Maximum search results to consider for fetching.
   results: 6
   # Maximum pages to fetch and include in the answer.
   pages: 3
-  # Overall deadline in seconds for all fetches combined.
+  # Soft deadline in seconds. Pages are read in parallel; when this passes and
+  # pages are still loading, a provisional answer is shown and the slow pages
+  # keep loading — never dropped. 0 waits for everything before answering.
   deadline_s: 10
+  # The most characters of one page sent to the model. Pages are sent whole;
+  # this is a safety valve for the rare enormous one, and anything it cuts is
+  # reported in the answer's notices rather than dropped silently. 0 = no limit.
+  max_source_chars: 100000
+  # The most characters of all pages together sent to the model; pages share it
+  # fairly, shortest first. 0 = no limit.
+  max_total_chars: 300000
 
 # Knowledge source adapters for ask mode (Phase 10):
 # Wikipedia and Stack Exchange provide encyclopedic answers; DDG Instant Answer

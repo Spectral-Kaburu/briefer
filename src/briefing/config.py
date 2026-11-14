@@ -13,7 +13,7 @@ from pathlib import Path
 
 import yaml
 from platformdirs import user_config_dir
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 #: The environment variable that names a config file (T8.3).
 CONFIG_PATH_ENV = "BRIEFING_CONFIG"
@@ -140,10 +140,21 @@ class BriefingConfig(BaseModel):
     #: Preferred LLM provider when both have valid keys (gemini, openai, or "" for auto).
     #: Auto means pick OpenAI if key present, else Gemini.
     preferred_provider: str = ""
-    #: Gemini LLM configuration for --llm and --synth modes (T9.4).
+    #: Gemini LLM configuration (used by `ask`, `research` and the briefing).
     gemini: GeminiConfig = GeminiConfig()
     #: OpenAI-compatible LLM configuration (OpenAI, NVIDIA NIM, etc.).
     openai: OpenAIConfig = OpenAIConfig()
+
+    @field_validator("preferred_provider")
+    @classmethod
+    def _known_provider(cls, value: str) -> str:
+        """A typo here used to do nothing: the other provider was picked silently."""
+        folded = value.strip().lower()
+        if folded not in ("", "gemini", "openai"):
+            raise ValueError(
+                f"unknown provider {value!r}; use 'gemini', 'openai', or leave it empty for auto"
+            )
+        return folded
 
 
 class TimeoutsConfig(BaseModel):
@@ -174,8 +185,18 @@ class AskConfig(BaseModel):
     results: int = 6
     #: Maximum number of pages to fetch and include in the answer.
     pages: int = 3
-    #: Overall deadline in seconds for all fetches combined (T9.5).
+    #: The soft deadline, in seconds, for `ask` and `research` alike. When it
+    #: passes and pages are still loading, the answer so far is shown as
+    #: provisional and the slow pages keep loading (each bounded only by
+    #: `timeouts.per_url_s`). A page past the deadline is never dropped.
     deadline_s: float = 10.0
+    #: The most characters of one page sent to the model. Pages are sent whole;
+    #: this is a safety valve for the rare enormous one, and anything it cuts is
+    #: reported. 0 means no limit.
+    max_source_chars: int = 100_000
+    #: The most characters of all pages together sent to the model; pages share
+    #: it fairly, shortest first. Sized for a 128k-token model. 0 means no limit.
+    max_total_chars: int = 300_000
 
 
 class KnowledgeConfig(BaseModel):

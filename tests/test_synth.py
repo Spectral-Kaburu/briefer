@@ -1,18 +1,17 @@
-"""Tests for synth.py: the briefing synthesis and its fallback (T5.3), and the
-research summaries and answer (T4.1).
+"""Tests for synth.py: the briefing synthesis and its fallback (T5.3), the two
+providers, and `call_model`'s promise that a model failure is always a value that
+says where it failed.
 
 SPEC section 6: a Gemini prompt turns the name, yesterday's session summary and
 today's headlines into 2-3 spoken sentences. The network is never touched here:
 `Speaker` depends on the `generate` method, not on the `Gemini` class, so the
 tests hand it any object with `async generate(prompt)` and never construct a key
-(CLAUDE.md: never call the real Gemini in tests). `ResearchSynth` is handed the
-same way.
+(CLAUDE.md: never call the real Gemini in tests).
 
 The fallback matters as much as the synthesis: SPEC section 6 says a briefing
 whose fetching failed entirely gets a plain greeting rather than silence, and a
 model that raises, returns nothing, or returns only whitespace must all degrade
-the same way. SPEC section 2's `--llm` degrades to the extractive summary that is
-already on the result, for the same reason.
+the same way, and now log why.
 """
 
 from __future__ import annotations
@@ -22,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from briefing.synth import NO_NAME_GREETING, ResearchSynth, Speaker
+from briefing.synth import NO_NAME_GREETING, ModelResult, Speaker, call_model, redact
 
 # Every test here awaits, so the marker is module-wide rather than 13 copies.
 pytestmark = pytest.mark.asyncio
@@ -295,76 +294,6 @@ async def test_a_missing_prompt_file_falls_back_without_calling_the_client() -> 
         synth.PROMPT_PATH.write_text(original, encoding="utf-8")
 
 
-# --- research mode (T4.1; SPEC section 2) ------------------------------------
-
-SOURCES = [
-    ("Bank holds the rate", "The central bank left its benchmark rate at 12 percent."),
-    ("Flooding displaces families", "Families in Nairobi moved to higher ground."),
-]
-EXTRACTIVE = "The bank left its rate at 12 percent."
-
-
-async def test_llm_replaces_the_picked_sentences_with_the_models_summary() -> None:
-    """SPEC section 2's `--llm`: an abstractive summary, not a re-picked extractive one."""
-    client = FakeClient("The central bank held its benchmark rate steady at 12 percent.")
-    summary = await ResearchSynth(client).summary(
-        heading="Bank holds the rate", text="The bank left its rate.", fallback=EXTRACTIVE
-    )
-    assert summary == "The central bank held its benchmark rate steady at 12 percent."
-
-
-@pytest.mark.parametrize(
-    ("text", "raises"),
-    [
-        (None, None),
-        ("", None),
-        ("   \n\t ", None),
-        ("never reached", RuntimeError("quota")),
-    ],
-)
-async def test_any_model_failure_keeps_the_extractive_summary(
-    text: str | None, raises: Exception | None
-) -> None:
-    """SPEC section 2: `--llm` is an opt-in, so a model that cannot answer must leave
-    the summary the page already had rather than ending the run."""
-    client = FakeClient(text, raises=raises)
-    summary = await ResearchSynth(client).summary(heading="H", text="Body.", fallback=EXTRACTIVE)
-    assert summary == EXTRACTIVE
-
-
-async def test_the_summary_prompt_carries_the_heading_and_the_page_text() -> None:
-    """What an abstractive summary is written from: the heading, and the page text."""
-    client = FakeClient()
-    await ResearchSynth(client).summary(
-        heading="Bank holds the rate", text="Body sentences here.", fallback=EXTRACTIVE
-    )
-    assert "Bank holds the rate" in client.prompts[0]
-    assert "Body sentences here." in client.prompts[0]
-
-
-async def test_the_answer_prompt_numbers_every_source() -> None:
-    """SPEC section 2: the answer cites source numbers, so the prompt has to number them."""
-    client = FakeClient()
-    await ResearchSynth(client).answer(query="What did the bank do?", sources=SOURCES)
-    prompt = client.prompts[0]
-    assert "What did the bank do?" in prompt
-    for position, (heading, _) in enumerate(SOURCES, start=1):
-        assert f"{position}. {heading}" in prompt
-
-
-async def test_no_answer_is_returned_when_the_model_fails() -> None:
-    """`--synth` is additive: nothing to show means the numbered cards are the answer."""
-    client = FakeClient(raises=RuntimeError("down"))
-    assert await ResearchSynth(client).answer(query="q", sources=SOURCES) is None
-
-
-async def test_nothing_is_summarised_when_there_are_no_sources() -> None:
-    """Nothing fetched means nothing to synthesise, and never a call with nothing."""
-    client = FakeClient()
-    assert await ResearchSynth(client).answer(query="q", sources=[]) is None
-    assert client.prompts == []
-
-
 # --- OpenAI provider (T13) -----------------------------------------------------
 
 
@@ -475,3 +404,183 @@ async def test_openai_client_falls_back_on_exception() -> None:
     result = await speaker.briefing(["News item 1", "News item 2"])
     assert result.text == "Good morning, Sam."
     assert result.fallback is True
+
+
+# --- provider regressions + diagnostics ----------------------------------------
+
+
+def _fake_openai_module(captured: dict[str, t.Any]) -> t.Any:
+    """A stand-in `openai` package whose client records how it was built."""
+    import types
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs: t.Any) -> None:
+            captured.update(kwargs)
+            self.chat = MagicMock()
+            message = MagicMock()
+            message.content = "ok"
+            message.refusal = None
+            choice = MagicMock(message=message, finish_reason="stop")
+            completion = MagicMock(choices=[choice], usage=None)
+            self.chat.completions.create = AsyncMock(return_value=completion)
+
+    module = types.ModuleType("openai")
+    module.AsyncOpenAI = FakeAsyncOpenAI  # type: ignore[attr-defined]
+    return module
+
+
+async def test_openai_base_url_is_used_when_a_key_is_set(monkeypatch: t.Any) -> None:
+    """Regression: the endpoint was dropped whenever a key existed, so an NVIDIA key
+    was sent to api.openai.com and rejected there."""
+    from briefing.synth import OpenAI
+
+    captured: dict[str, t.Any] = {}
+    monkeypatch.setitem(__import__("sys").modules, "openai", _fake_openai_module(captured))
+    monkeypatch.setenv("NVIDIA_API_KEY", "nv-secret-key")
+
+    client = OpenAI(
+        model="meta/llama-3.1-70b-instruct",
+        api_key_env="NVIDIA_API_KEY",
+        base_url="https://integrate.api.nvidia.com/v1",
+    )
+    result = await client.generate("hi")
+    assert captured["base_url"] == "https://integrate.api.nvidia.com/v1"
+    assert captured["api_key"] == "nv-secret-key"
+    assert result.text == "ok"
+
+
+async def test_a_missing_key_is_an_error_not_the_sdks_own_fallback(monkeypatch: t.Any) -> None:
+    """`None` would let the SDK read OPENAI_API_KEY and send it to another service."""
+    from briefing.synth import OpenAI
+
+    monkeypatch.setitem(__import__("sys").modules, "openai", _fake_openai_module({}))
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-the-wrong-service")
+
+    client = OpenAI(api_key_env="NVIDIA_API_KEY", base_url="https://integrate.api.nvidia.com/v1")
+    result = await call_model(client, "hi")
+    assert result.stage == "request"
+    assert "NVIDIA_API_KEY is not set" in (result.problem() or "")
+
+
+async def test_the_renamed_token_limit_is_retried_once() -> None:
+    """Newer OpenAI models want `max_completion_tokens`; the error names it."""
+    from briefing.synth import OpenAI
+
+    client = OpenAI()
+    message = MagicMock(content="fine", refusal=None)
+    completion = MagicMock(choices=[MagicMock(message=message, finish_reason="stop")], usage=None)
+    create = AsyncMock(
+        side_effect=[ValueError("Unsupported parameter: use max_completion_tokens"), completion]
+    )
+    client._client = MagicMock()
+    client._client.chat.completions.create = create
+
+    result = await client.generate("hi", max_output_tokens=300)
+    assert result.text == "fine"
+    assert "max_tokens" in create.call_args_list[0].kwargs
+    assert create.call_args_list[1].kwargs["max_completion_tokens"] == 300
+
+
+@pytest.mark.parametrize(
+    ("finish_reason", "expected"),
+    [
+        ("length", True),  # OpenAI and compatible endpoints
+        ("MAX_TOKENS", True),  # Gemini
+        ("FinishReason.MAX_TOKENS", True),  # Gemini, stringified enum
+        ("stop", False),
+        ("STOP", False),
+        (None, False),
+    ],
+)
+async def test_truncation_is_recognised_for_both_providers(
+    finish_reason: str | None, expected: bool
+) -> None:
+    """Regression: only Gemini's spelling was recognised, so a cut-off OpenAI answer
+    went out looking complete."""
+    assert ModelResult(text="partial", finish_reason=finish_reason).truncated is expected
+
+
+@pytest.mark.parametrize(
+    ("result", "stage", "needle"),
+    [
+        (ModelResult(text="fine", finish_reason="stop"), None, ""),
+        (ModelResult(text=None, error="RuntimeError: quota", label="gemini/x"), "request", "quota"),
+        (ModelResult(text=None, block_reason="SAFETY", label="gemini/x"), "blocked", "SAFETY"),
+        (ModelResult(text="cut", finish_reason="length", label="m"), "truncated", "output limit"),
+        (ModelResult(text="  ", finish_reason="stop", label="m"), "empty", "no text"),
+        (ModelResult(text=None), "empty", "the model returned no text"),
+    ],
+)
+async def test_a_result_says_where_it_went_wrong(
+    result: ModelResult, stage: str | None, needle: str
+) -> None:
+    assert result.stage == stage
+    assert (result.problem() or "") == "" if stage is None else needle in (result.problem() or "")
+
+
+async def test_call_model_never_raises_and_names_the_failure() -> None:
+    class Boom:
+        label = "openai/gpt-4o-mini"
+
+        async def generate(self, prompt: str) -> str:
+            raise ConnectionError("connection refused")
+
+    result = await call_model(Boom(), "q")
+    assert result.text is None
+    assert result.stage == "request"
+    assert result.label == "openai/gpt-4o-mini"
+    assert "ConnectionError" in (result.problem() or "")
+
+
+async def test_call_model_keeps_the_key_out_of_the_reason(monkeypatch: t.Any) -> None:
+    """An SDK error can quote the request it made; the key must not reach the screen."""
+    monkeypatch.setenv("TEST_KEY_ENV", "sk-abcdef1234567890")
+
+    class Leaky:
+        api_key_env = "TEST_KEY_ENV"
+
+        async def generate(self, prompt: str) -> str:
+            raise RuntimeError(
+                "401 invalid key sk-abcdef1234567890; header Authorization: Bearer zzzzzzzzzzzz"
+            )
+
+    problem = (await call_model(Leaky(), "q")).problem() or ""
+    assert "sk-abcdef1234567890" not in problem
+    assert "zzzzzzzzzzzz" not in problem
+    assert "***" in problem
+
+
+async def test_call_model_passes_the_token_budget_only_when_given() -> None:
+    """Older doubles take just a prompt; they must keep working."""
+    seen: list[dict[str, t.Any]] = []
+
+    class Budgeted:
+        async def generate(self, prompt: str, **kwargs: t.Any) -> str:
+            seen.append(kwargs)
+            return "text"
+
+    await call_model(Budgeted(), "q")
+    await call_model(Budgeted(), "q", max_output_tokens=900)
+    assert seen == [{}, {"max_output_tokens": 900}]
+
+
+async def test_a_reasoning_models_think_block_is_not_part_of_the_answer() -> None:
+    client = FakeClient("<think>the user wants a rate</think>The rate is 12 percent.")
+    assert (await call_model(client, "q")).text == "The rate is 12 percent."
+
+
+async def test_the_briefing_logs_why_the_model_failed(caplog: t.Any) -> None:
+    """The greeting fallback is spec'd, but it used to hide the reason entirely."""
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="briefing.synth")
+    briefing = await speaker(FakeClient(raises=RuntimeError("quota exceeded"))).briefing(HEADLINES)
+    assert briefing.fallback is True
+    assert any("quota exceeded" in record.getMessage() for record in caplog.records)
+
+
+async def test_redact_collapses_to_one_capped_line() -> None:
+    out = redact("line one\n   line two " + "x" * 500)
+    assert "\n" not in out
+    assert len(out) <= 300

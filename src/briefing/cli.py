@@ -13,7 +13,6 @@ depend on the terminal. Plain Click's help is stable everywhere.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import os
 import typing as t
@@ -23,7 +22,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from briefing.ask import Answer, FetchOutcome, NoSearchResultsError
+from briefing.ask import NoSearchResultsError
 from briefing.briefing import (
     DedupStore,
     FileAudioState,
@@ -45,14 +44,23 @@ from briefing.config import (
 from briefing.deliver import DeliveryError, SubprocessRunner, deliver
 from briefing.extract import Extracted, extract
 from briefing.fetch.api import ApiFirecrawl, usage_today
+from briefing.fetch.errors import ErrorClass
 from briefing.fetch.local import FirecrawlSearch, LocalFirecrawl
-from briefing.fetch.router import Router
+from briefing.fetch.router import Method, Router
+from briefing.inquiry import (
+    ASK,
+    RESEARCH,
+    Answer,
+    EvidenceSource,
+    Fetched,
+    Profile,
+    inquire,
+)
 from briefing.log import configure as configure_logging
 from briefing.log import get_logger
-from briefing.pipeline import Pipeline, Report
 from briefing.search import PreferredSite, Searcher, SearchResult
-from briefing.synth import Gemini, ModelResult, OpenAI, ResearchSynth, Speaker
-from briefing.ui import UI, AskProgress, answer, render_answer
+from briefing.synth import Gemini, ModelResult, OpenAI, Speaker, call_model
+from briefing.ui import UI
 from briefing.whitelist import Whitelist, WhitelistEntry, normalize_host
 
 
@@ -92,48 +100,32 @@ def _audio(loaded: Config) -> FileAudioState:
 
 
 def _selected_llm(loaded: Config) -> tuple[t.Any | None, str | None]:
-    """Select the LLM provider that has a valid key.
+    """Select the LLM provider that has a valid key, built from its configured block.
 
     Returns (provider, provider_name) or (None, None) if no key is available.
-    Priority respects config.preferred_provider when both keys are present.
-    If preferred_provider is empty, defaults to OpenAI (if key exists), then Gemini.
+    `preferred_provider` decides when both keys are present; empty means OpenAI
+    first. A preferred provider without a key is skipped, not an error: the other
+    one still has a key, and `briefing status` says which keys are missing.
 
     The caller decides what to do when no key is found (fallback behavior).
     """
-    openai_key = resolve_openai_key(loaded, os.environ)
-    gemini_key = resolve_gemini_key(loaded, os.environ)
-
-    # Check preferred provider setting
-    preferred = (
-        loaded.briefing.preferred_provider.lower() if loaded.briefing.preferred_provider else ""
-    )
-
-    # Both keys available - respect preferred_provider or default to openai
-    if openai_key and gemini_key:
-        if preferred == "gemini":
-            return (Gemini(), "gemini")
-        # Default: prefer openai when both keys present
-        return (
-            OpenAI(
-                model=loaded.briefing.openai.model,
-                api_key_env=loaded.briefing.openai.api_key_env,
-                base_url=loaded.briefing.openai.base_url,
-            ),
-            "openai",
+    cfg = loaded.briefing
+    available: dict[str, t.Callable[[], t.Any]] = {}
+    if resolve_openai_key(loaded, os.environ):
+        available["openai"] = lambda: OpenAI(
+            model=cfg.openai.model,
+            api_key_env=cfg.openai.api_key_env,
+            base_url=cfg.openai.base_url,
         )
-
-    # Only one key available
-    if openai_key:
-        return (
-            OpenAI(
-                model=loaded.briefing.openai.model,
-                api_key_env=loaded.briefing.openai.api_key_env,
-                base_url=loaded.briefing.openai.base_url,
-            ),
-            "openai",
+    if resolve_gemini_key(loaded, os.environ):
+        available["gemini"] = lambda: Gemini(
+            model=cfg.gemini.model,
+            api_key_env=cfg.gemini.api_key_env,
         )
-    if gemini_key:
-        return (Gemini(), "gemini")
+    order = ["gemini", "openai"] if cfg.preferred_provider == "gemini" else ["openai", "gemini"]
+    for name in order:
+        if name in available:
+            return (available[name](), name)
     return (None, None)
 
 
@@ -147,17 +139,6 @@ def _speaker(loaded: Config, session_summary: str = "") -> Speaker:
         user_name=loaded.briefing.user_name,
         session_summary=session_summary,
     )
-
-
-def _summarizer(loaded: Config) -> ResearchSynth:
-    """LLM client for abstractive summaries, auto-selects provider with key.
-
-    Brief mode's `Speaker` and this both wrap an LLM client, so a run makes at most
-    one client and neither mode pays for the other's.
-    """
-    provider, _ = _selected_llm(loaded)
-    llm = provider if provider else Gemini()  # fallback with defaults if no key
-    return ResearchSynth(llm)
 
 
 def _has_llm(loaded: Config) -> bool:
@@ -179,43 +160,54 @@ def _begin(config: str | None, verbose: bool, *, news: bool, web: bool) -> Confi
 
 # The seams the tests patch by name, so a whole run's collaborator graph swaps
 # without touching a running event loop. Real code uses the real things.
-_PIPELINE = Pipeline
 _RUNNER = SubprocessRunner
 _SEARCH = _search
 _SPEAKER = _speaker
 _AUDIO = _audio
 _DEDUP = _dedup
-_SUMMARIZER = _summarizer
 
 # _ASK is the ask implementation that can be swapped by tests.
 # It accepts CLI parameters and returns an Answer.
 
 
-async def _ask_implementation(
+# The engine seam the tests patch by name, so a whole run's collaborator graph
+# swaps without touching a running event loop. Real code uses the real engine.
+_INQUIRE = inquire
+
+#: What the last `_inquire_command` wired up: the searcher, router and the
+#: engine arguments. A registry rather than a return value because the command
+#: hands the Answer back to its caller, and the wiring tests assert on this.
+_LAST_BUILT: dict[str, t.Any] = {}
+
+
+async def _inquire_command(
+    profile: Profile,
     query: str,
     *,
+    loaded: Config,
+    pages: int,
+    time: str | None,
+    no_api: bool,
+    no_knowledge: bool,
+    results: int | None = None,
     news: bool = False,
     web: bool = False,
-    time: str | None = None,
-    pages: int = 3,
-    no_api: bool = False,
-    no_knowledge: bool = False,
-    config: str | None = None,
+    plain: bool | None = None,
+    json_out: bool = False,
     on_progress: t.Callable[[str, str], None] | None = None,
+    on_source: t.Callable[[EvidenceSource], None] | None = None,
+    on_partial: t.Callable[[Answer], None] | None = None,
 ) -> Answer:
-    """Build collaborators and call ask.ask (the real implementation).
+    """Shared implementation for ask and research modes (Stream C refactoring).
 
-    This is the actual ask implementation that tests don't patch - they patch
-    _ASK instead.
+    Builds collaborators and calls the inquiry engine with the given profile.
     """
-    from briefing.ask import ask
-
-    loaded = _load(config)
-
-    mode = _mode_for(news, web)
+    mode = _mode_for(news, web)  # None leaves the search to auto-detect
 
     # Create searcher
     searcher = _searcher(loaded, mode)
+    if results is not None:
+        searcher.max_results = results
     if time is not None:
         searcher.timelimit = _timelimit(time)
 
@@ -223,47 +215,55 @@ async def _ask_implementation(
     whitelist = _whitelist(loaded)
     router = _router(loaded, no_api, whitelist)
 
-    async def _fetch_hit(hit: SearchResult) -> FetchOutcome:
-        """One search hit through the router, in the shape `ask.ask` wants.
+    # What this run was wired with, recorded so a test can assert the config
+    # reached the collaborators it was meant for.
+    built: dict[str, t.Any] = {"searcher": searcher, "router": router}
+    _LAST_BUILT.clear()
+    _LAST_BUILT.update(built)
 
-        `Router.fetch(url, snippet)` takes two arguments. This used to pass four
-        (title and source as well), which raised a `TypeError` that `ask` swallowed,
-        so every page "failed" and every answer was built from search snippets. It
-        also handed back the *snippet* as the markdown, so even a working fetch would
-        never have reached the page's own text.
-
-        `markdown` is the page when the fetch worked and empty when it did not, which
-        is what tells `ask` there is a page to extract the answer from. The `Method`
-        rides along so a page fetched through the API is not labelled LOCAL.
-        """
+    async def fetch_hit(hit: SearchResult) -> Fetched:
+        """One search hit through the router, returning a Fetched namedtuple."""
         result = await router.fetch(hit.url, hit.snippet or "")
-        markdown = result.markdown if result.ok else ""
-        return result.heading, result.summary, markdown, result.method
+        if result.markdown and result.ok:
+            return Fetched(
+                heading=result.heading,
+                summary=result.summary,
+                markdown=result.markdown,
+                method=result.method,
+                ok=True,
+                error_class=ErrorClass.OK,
+                warning="",
+            )
+        return Fetched(
+            heading=result.heading,
+            summary=result.summary,
+            markdown="",
+            method=Method.SNIPPET,
+            ok=False,
+            error_class=result.error_class,
+            warning=result.warning,
+        )
 
-    # Create a simple async wrapper for search
-    async def _search_hits(q: str) -> list[SearchResult]:
+    async def search_hits(q: str) -> list[SearchResult]:
         return await searcher.search(q)
 
     # Build extractor
     extractor = Extractor(loaded.summary.sentences)
 
-    # Resolve LLM for the model - auto-select provider with valid key
+    # Resolve LLM for the model
     llm_result = _selected_llm(loaded)
-    model: t.Callable[[str, str], t.Awaitable[str | None]] | None = None
+    model: t.Callable[[str, str], t.Awaitable[t.Any]] | None = None
 
     if llm_result[0] is not None:
         llm, _provider_name = llm_result
 
         async def _model(prompt: str, query: str) -> ModelResult:
             """Call the LLM model and return ModelResult with metadata."""
-            try:
-                return await llm.generate(prompt)
-            except Exception:  # noqa: BLE001
-                return ModelResult(text=None, finish_reason=None, usage=None)
+            return await call_model(llm, prompt, max_output_tokens=profile.max_output_tokens)
 
         model = _model
 
-    # Create knowledge adapters if enabled (respect no_knowledge override)
+    # Build knowledge adapters
     knowledge_adapters: list = []
     if loaded.knowledge.enabled and not no_knowledge:
         from briefing.knowledge.stackexchange import StackExchangeAdapter
@@ -281,26 +281,72 @@ async def _ask_implementation(
             )
             knowledge_adapters.append(se_adapter)
 
-    # Call the ask function from ask.py
-    return await ask(
-        query=query,
-        search=_search_hits,
-        fetch=_fetch_hit,
-        extract=extractor.extract,
-        model=model,
-        results=loaded.ask.results,
-        pages=pages,
-        per_url_s=loaded.timeouts.per_url_s,
-        deadline_s=loaded.ask.deadline_s,
+    # The provisional answer and the per-page lines only make sense when a display
+    # is there to receive them; a --json or --plain run must print nothing early.
+    # The callers decide that and pass the callbacks; nothing is derived here.
+
+    engine_kwargs: dict[str, t.Any] = {
+        "profile": profile,
+        "query": query,
+        "search": search_hits,
+        "fetch": fetch_hit,
+        "extract": extractor.extract,
+        "model": model,
+        "pages": pages,
+        "per_url_s": loaded.timeouts.per_url_s,
+        "deadline_s": loaded.ask.deadline_s,
+        "concurrency": loaded.firecrawl.local.concurrency,
+        "max_source_chars": loaded.ask.max_source_chars,
+        "max_total_chars": loaded.ask.max_total_chars,
+        "whitelist": whitelist,
+        "on_progress": on_progress,
+        "on_source": on_source,
+        "on_partial": on_partial,
+    }
+    _LAST_BUILT.clear()
+    _LAST_BUILT.update(built, **engine_kwargs)
+    return await _INQUIRE(
+        **engine_kwargs,
         knowledge_enabled=loaded.knowledge.enabled and not no_knowledge,
         knowledge_adapters=knowledge_adapters if knowledge_adapters else None,
         knowledge_config=loaded.knowledge,
-        on_progress=on_progress,
     )
 
 
-# The seam that tests patch - starts as the real implementation
-_ASK = _ask_implementation
+def _ask_impl(
+    query: str,
+    *,
+    news: bool = False,
+    web: bool = False,
+    time: str | None = None,
+    pages: int = 3,
+    no_api: bool = False,
+    no_knowledge: bool = False,
+    config: str | None = None,
+    on_progress: t.Callable[[str, str], None] | None = None,
+    on_source: t.Callable[[EvidenceSource], None] | None = None,
+    on_partial: t.Callable[[Answer], None] | None = None,
+) -> Answer:
+    """Build collaborators and call inquire with ASK profile."""
+    loaded = _load(config)
+    return _inquire_command(
+        profile=ASK,
+        query=query,
+        loaded=loaded,
+        pages=pages,
+        time=time,
+        no_api=no_api,
+        no_knowledge=no_knowledge,
+        news=news,
+        web=web,
+        on_progress=on_progress,
+        on_source=on_source,
+        on_partial=on_partial,
+    )
+
+
+# The seam the tests patch - points to the implementation wrapper.
+_ASK = _ask_impl
 
 
 def _ask(
@@ -320,13 +366,8 @@ def _ask(
     """Ask a question and get an answer with numbered sources."""
     _begin(config, verbose, news=news, web=web)
 
-    progress = AskProgress.maybe(json_out=json_out, plain=plain)
-    # Passed only when there is a display for it, so the call a test double of
-    # `_ASK` receives is exactly the one it always was.
-    extra: dict[str, t.Any] = {} if progress is None else {"on_progress": progress.update}
-
-    try:
-        with progress if progress is not None else contextlib.nullcontext():
+    if json_out:
+        try:
             result: Answer = asyncio.run(
                 _ASK(
                     query=query,
@@ -337,17 +378,37 @@ def _ask(
                     no_api=no_api,
                     no_knowledge=no_knowledge,
                     config=config,
-                    **extra,
                 )
             )
-    except NoSearchResultsError as exc:
-        _fail(exc.message, exc.hint)
-
-    # Render the output
-    if json_out:
+        except NoSearchResultsError as exc:
+            _fail(exc.message, exc.hint)
         typer.echo(json.dumps(result.as_dict(), indent=2))
-    else:
-        render_answer(result, plain=plain)
+        return
+
+    # A display is present: give it the live per-page lines and the provisional
+    # answer. `--plain` still renders, just without decoration, so it counts.
+    with UI(plain=plain) as ui:
+        ui.begin(query, ASK, _mode_for(news, web))
+        try:
+            result = asyncio.run(
+                _ASK(
+                    query=query,
+                    pages=pages,
+                    time=time,
+                    news=news,
+                    web=web,
+                    no_api=no_api,
+                    no_knowledge=no_knowledge,
+                    config=config,
+                    on_progress=ui.on_progress,
+                    on_source=ui.on_source,
+                    on_partial=ui.on_partial,
+                )
+            )
+        except NoSearchResultsError as exc:
+            ui.close()
+            _fail(exc.message, exc.hint)
+        ui.show(result)
 
 
 def _STATE_DIR() -> Path:
@@ -734,6 +795,46 @@ def show_config(
         typer.echo(line)
 
 
+def _research_json(answer: Answer) -> dict[str, t.Any]:
+    """The answer as research JSON: the keys research consumers already rely on.
+
+    `found`, `succeeded`, `elapsed_s`, `whitelisted` and `results[...]` are the
+    old report's fields and keep their names and shapes, so a consumer written
+    against `briefing research --json` keeps working. `answer`, `model` and
+    `notices` are the engine's additions, absent-with-a-null where they do not
+    apply rather than silently dropped.
+    """
+    payload: dict[str, t.Any] = {
+        "found": answer.found,
+        "succeeded": sum(1 for s in answer.sources if s.ok),
+        "elapsed_s": sum(answer.timings.values()) if answer.timings else 0.0,
+        "whitelisted": [[domain, reason] for domain, reason in answer.whitelisted],
+        "results": [
+            {
+                "rank": source.number,
+                "title": source.title,
+                "heading": source.heading,
+                "summary": source.text,
+                "snippet": source.snippet,
+                "url": source.url,
+                "domain": source.domain,
+                "source": source.outlet or source.source,
+                "age": source.age,
+                "method": source.method_name.lower(),
+                "ok": source.ok,
+                "error_class": source.error_class.name,
+                # SPEC section 4's reason, so a consumer sees what the terminal
+                # sees rather than inferring it from `method` alone.
+                "warning": source.warning,
+            }
+            for source in answer.sources
+        ],
+        **answer.diagnostics(),
+    }
+    payload["answer"] = answer.text
+    return payload
+
+
 def _research(
     query: str,
     *,
@@ -749,71 +850,92 @@ def _research(
     llm: bool = False,
     synth: bool = False,
 ) -> None:
-    """Wire the collaborators from config, run the pipeline, render the report.
+    """Wire the collaborators from config, run inquiry, render the answer.
 
     Every failure path exits with a plain-English message and a fix hint and no
     traceback (SPEC section 3); `_load` already turns a `ConfigError` into one.
+
+    Note: `--synth` and `--llm` flags are kept for backward compatibility but
+    the synthesis is now handled internally by the inquire engine (RESEARCH profile).
     """
     loaded = _begin(config, verbose, news=news, web=web)
 
     if results is not None and results < 1:
         _fail(f"--results must be at least 1, not {results}.", "Try a value like 10.")
 
-    searcher = _searcher(loaded, _mode_for(news, web))
-    if results is not None:
-        searcher.max_results = results
-    if time is not None:
-        searcher.timelimit = _timelimit(time)
-
-    whitelist = _whitelist(loaded)
-    ui = None if json_out else UI(plain=plain)
-    # Built only when a flag asks for it. LLM features are on by default
-    # (SPEC section 2), and a client that is never called is never built.
+    # Check LLM availability for --llm/--synth flags (kept for backward compat)
     has_llm = _has_llm(loaded)
     if (llm or synth) and not has_llm:
         typer.echo(
             "No LLM API key found (set OPENAI_API_KEY or GEMINI_API_KEY); using extractive summary.",
             err=True,
         )
-    summarizer = _SUMMARIZER(loaded) if (llm or synth) and has_llm else None
-    pipeline = _PIPELINE(
-        searcher=searcher,
-        router=_router(loaded, no_api, whitelist),
-        extractor=Extractor(loaded.summary.sentences),
-        whitelist=whitelist,
-        concurrency=loaded.firecrawl.local.concurrency,
-        timeout_s=loaded.timeouts.per_url_s,
-        summarizer=summarizer,
-    )
-    if ui is not None:
-        # The header names the mode the run will actually use, not a second guess.
-        ui.begin(query, searcher.mode_for(query))
-    try:
-        report = asyncio.run(pipeline.run(query, on_event=None if ui is None else ui.on_event))
-    except KeyboardInterrupt:  # pragma: no cover - interactive only
-        _fail("Interrupted.", "Run the same command again; partial results were not saved.")
-    # `--synth` is its own call, after the run: it answers from every page, so it
-    # has nothing to say until the run is over. Second `asyncio.run` rather than a
-    # nested one, because the pipeline's loop is already closed by then.
-    cited = _answer_sources(report)
-    answer_text = (
-        asyncio.run(summarizer.answer(query=query, sources=cited))
-        if synth and summarizer is not None
-        else None
-    )
-    if ui is not None:
-        ui.show(report)
-        if answer_text:
-            ui.console.print(answer(answer_text, plain=ui.plain, sources=len(cited)))
-    else:
-        typer.echo(json.dumps(_as_json(report, answer_text), indent=2))
+
+    if json_out:
+        # Nothing prints early in JSON mode: the whole payload comes at the end.
+        try:
+            answer = asyncio.run(
+                _inquire_command(
+                    profile=RESEARCH,
+                    query=query,
+                    loaded=loaded,
+                    pages=None,
+                    time=time,
+                    no_api=no_api,
+                    no_knowledge=False,
+                    results=results,
+                    news=news,
+                    web=web,
+                    json_out=json_out,
+                )
+            )
+        except NoSearchResultsError as exc:
+            _fail(exc.message, exc.hint)
+        except KeyboardInterrupt:  # pragma: no cover - interactive only
+            _fail("Interrupted.", "Run the same command again; partial results were not saved.")
+        typer.echo(json.dumps(_research_json(answer), indent=2))
+        return
+
+    # A display is present: give it the live per-page lines and the
+    # provisional answer, same as ask.
+    with UI(plain=plain) as ui:
+        ui.begin(query, RESEARCH, _mode_for(news, web))
+        try:
+            answer = asyncio.run(
+                _inquire_command(
+                    profile=RESEARCH,
+                    query=query,
+                    loaded=loaded,
+                    pages=None,
+                    time=time,
+                    no_api=no_api,
+                    no_knowledge=False,
+                    results=results,
+                    news=news,
+                    web=web,
+                    json_out=json_out,
+                    on_progress=ui.on_progress,
+                    on_source=ui.on_source,
+                    on_partial=ui.on_partial,
+                )
+            )
+        except NoSearchResultsError as exc:
+            ui.close()
+            _fail(exc.message, exc.hint)
+        except KeyboardInterrupt:  # pragma: no cover - interactive only
+            ui.close()
+            _fail("Interrupted.", "Run the same command again; partial results were not saved.")
+        ui.show(answer)
+
+    searcher = _LAST_BUILT.get("searcher")
+    mode = searcher.mode_for(query) if searcher is not None else None
     LOG.info(
-        "research %r via %s search: %d results, %d fetched ok, %.1fs",
+        "research %r via %s search: %d results, %d read ok, %.1fs",
         query,
-        searcher.mode_for(query) or "auto",
-        report.found,
-        report.succeeded,
-        report.elapsed_s,
+        mode or "auto",
+        answer.found,
+        sum(1 for s in answer.sources if s.ok),
+        sum(answer.timings.values()) if answer.timings else 0.0,
     )
 
 
@@ -1024,58 +1146,6 @@ def _timelimit(time: str) -> str | None:
     if time not in mapping:
         _fail(f"Unknown --time value {time!r}.", "Use one of: day, week, month, any.")
     return mapping[time]
-
-
-def _answer_sources(report: Report) -> list[tuple[str, str]]:
-    """(title, summary) per page worth citing, numbered later by `ResearchSynth`.
-
-    Only pages the run actually got content for: a failed fetch has no summary to
-    cite, and a source the answer invents from a snippet is worse than no source.
-    """
-    return [
-        (result.title or result.heading, result.summary)
-        for result in report.results
-        if result.ok and result.summary
-    ]
-
-
-def _as_json(report: Report, answer: str | None = None) -> dict[str, t.Any]:
-    """The report as JSON (SPEC section 3): every field a consumer would want.
-
-    `method` and `error_class` are strings so a JSON reader gets the same badge
-    vocabulary the terminal shows, and `ok` lets a consumer filter without
-    knowing the enum. `answer` is the `--synth` answer, absent without the flag so
-    a consumer never filters a field it did not ask for.
-    """
-    payload: dict[str, t.Any] = {
-        "found": report.found,
-        "succeeded": report.succeeded,
-        "elapsed_s": report.elapsed_s,
-        "whitelisted": [[domain, reason] for domain, reason in report.whitelisted],
-        "results": [
-            {
-                "rank": result.rank,
-                "title": result.title,
-                "heading": result.heading,
-                "summary": result.summary,
-                "snippet": result.snippet,
-                "url": result.url,
-                "domain": result.domain,
-                "source": result.source,
-                "age": result.age,
-                "method": result.method.value,
-                "ok": result.ok,
-                "error_class": result.error_class.name,
-                # SPEC section 4's reason, so a consumer sees what the terminal
-                # sees rather than inferring it from `method` alone.
-                "warning": result.warning,
-            }
-            for result in report.results
-        ],
-    }
-    if answer is not None:
-        payload["answer"] = answer
-    return payload
 
 
 def _fail(message: str, hint: str) -> t.NoReturn:

@@ -46,6 +46,7 @@ exclude = [".claude", ".venv", "build", "dist"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+asyncio_default_fixture_loop_scope = "function"
 markers = [
     "live: smoke test against the real ddgs/local Firecrawl; needs BRIEFING_LIVE=1",
 ]

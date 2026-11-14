@@ -9,6 +9,7 @@ cards or as JSON.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 import typing as t
@@ -22,9 +23,10 @@ from typer.testing import CliRunner
 import briefing.cli as cli_module
 import briefing.search as search_module
 from briefing.cli import app
-from briefing.fetch.router import ErrorClass, Method
-from briefing.pipeline import Report, Result
-from briefing.whitelist import Whitelist
+from briefing.fetch.router import Method
+from briefing.inquiry import ASK, Answer, EvidenceSource, inquire
+from briefing.search import SearchResult
+from briefing.whitelist import Whitelist, WhitelistEntry
 
 runner = CliRunner()
 
@@ -50,54 +52,82 @@ class _DeadDDGS:
         raise TimeoutException("ddgs timed out")
 
 
-class FakePipeline:
-    """Stands in for `Pipeline`, recording how it was constructed.
+class FakeInquiry:
+    """Stands in for the engine, recording how it was constructed and called.
 
-    Class-level on purpose: the CLI constructs it internally, so a test reads the
-    kwargs back off the class after `invoke` returns.
+    An awaitable callable rather than a plain function, because the seam is
+    `await`ed. Class-level state so a test reads the calls back after `invoke`
+    returns: this is the seam `_PIPELINE` used to be, and the wiring tests (does
+    the timeout reach the engine, does `--results` reach the searcher) read what
+    the CLI built rather than running a real search.
     """
 
     built: t.ClassVar[dict[str, t.Any]] = {}
-    report: t.ClassVar[Report]
+    answer: t.ClassVar[Answer]
+    #: Every `inquire(...)` call, so a test can assert the profile it was given.
+    calls: t.ClassVar[list[dict[str, t.Any]]] = []
 
-    def __init__(self, **kwargs: t.Any) -> None:
-        FakePipeline.built = kwargs
+    @classmethod
+    def make(cls) -> t.Callable[..., t.Awaitable[Answer]]:
+        """A fresh async callable bound to this class's recording state."""
 
-    async def run(self, query: str, *, on_event: t.Any = None) -> Report:
-        FakePipeline.built["query"] = query
-        return FakePipeline.report  # type: ignore[attr-defined]
+        async def _inquiry(**kwargs: t.Any) -> Answer:
+            cls.calls.append(kwargs)
+            return cls.answer
 
-
-def _configure(report: Report, monkeypatch: t.Any) -> None:
-    """Point the CLI's factory at a fake pipeline returning `report`."""
-    FakePipeline.report = report
-    monkeypatch.setattr(cli_module, "_PIPELINE", FakePipeline)
+        return _inquiry
 
 
-def _result() -> Result:
-    return Result(
-        rank=1,
+def _configure(answer: Answer, monkeypatch: t.Any) -> None:
+    """Point the CLI's engine seam at a fake returning `answer`."""
+    FakeInquiry.answer = answer
+    FakeInquiry.calls = []
+    monkeypatch.setattr(cli_module, "_INQUIRE", FakeInquiry.make())
+
+
+def _inquiry_kwargs(**overrides: t.Any) -> dict[str, t.Any]:
+    """The arguments the CLI hands the engine, with the display seams dropped.
+
+    A research/ask run passes its UI callbacks; a test that only cares about
+    configuration compares the rest, so the callbacks are compared separately.
+    """
+    call = FakeInquiry.calls[-1]
+    return {
+        k: v for k, v in call.items() if k not in ("on_progress", "on_source", "on_partial")
+    } | overrides
+
+
+def _source() -> EvidenceSource:
+    return EvidenceSource(
+        number=1,
+        source="Bank raises rate",
+        domain="nation.africa",
         title="Bank raises rate",
         url="https://nation.africa/bank-raises-rate",
-        domain="nation.africa",
-        snippet="The central bank raised its lending rate.",
-        source="",
-        age="2h ago",
-        heading="Bank raises rate",
-        summary="A two sentence summary.",
         method=Method.LOCAL,
+        text="A two sentence summary.",
+        snippet="The central bank raised its lending rate.",
+        heading="Bank raises rate",
+        age="2h ago",
         ok=True,
-        error_class=ErrorClass.OK,
     )
 
 
-def _report() -> Report:
-    return Report(
-        results=[_result()],
-        found=1,
-        elapsed_s=6.4,
-        whitelisted=[("example.co.ke", "captcha")],
-    )
+def _answer(**overrides: t.Any) -> Answer:
+    base: dict[str, t.Any] = {
+        "question": "bank rate",
+        "text": "The bank held its rate steady [1].",
+        "used_llm": True,
+        "sources": [_source()],
+        "timings": {"search": 0.8, "fetch": 3.1, "model": 2.5},
+        "warnings": [],
+        "notices": [],
+        "found": 1,
+        "whitelisted": [("example.co.ke", "captcha")],
+        "profile": "research",
+    }
+    base.update(overrides)
+    return Answer(**base)
 
 
 # --- help -----------------------------------------------------------------
@@ -140,128 +170,85 @@ def test_the_r_shorthand_is_documented() -> None:
 
 # --- --llm and --synth (T4.1; SPEC section 2) --------------------------------
 
-#: What the fake model answers. Set per test rather than once, because the
-#: "said nothing" case leaves the class attribute None and would otherwise leak
-#: into the next test.
+#: What the fake model answers, for the tests that assert on rendered output.
 ANSWER = "The bank held its rate steady."
 
 
-class FakeSummarizer:
-    """Stands in for `ResearchSynth`: no Gemini client is ever constructed.
+def test_research_runs_the_engine_with_the_research_profile(monkeypatch: t.Any) -> None:
+    """The two modes are one engine differing by profile (the owner's requirement).
 
-    Class-level for the same reason `FakePipeline` is — the CLI builds the real
-    factory internally, so the test reads back what it built and what it asked.
+    `--llm` and `--synth` remain accepted for compatibility; the answer always
+    comes from the engine's RESEARCH profile now, not a second summarizer pass.
     """
-
-    built: t.ClassVar[dict[str, t.Any]] = {}
-    #: What the fake answers; None is the "model said nothing" case.
-    text: t.ClassVar[str | None] = "The bank held its rate steady."
-
-    def __init__(self, loaded: t.Any = None) -> None:
-        # The seam is called with the config positionally, the way the real
-        # `_summarizer(loaded)` is, even though this fake ignores it.
-        FakeSummarizer.built = {"loaded": loaded}
-
-    async def summary(self, *, heading: str, text: str, fallback: str) -> str:
-        FakeSummarizer.built["summary_call"] = (heading, fallback)
-        return "An abstractive summary."
-
-    async def answer(self, *, query: str, sources: t.Sequence[tuple[str, str]]) -> str | None:
-        FakeSummarizer.built["answer_query"] = query
-        FakeSummarizer.built["answer_sources"] = list(sources)
-        return FakeSummarizer.text
+    _configure(_answer(), monkeypatch)
+    result = runner.invoke(app, ["research", "bank rate", "--llm"])
+    assert result.exit_code == 0, result.stdout
+    assert FakeInquiry.calls[0]["profile"].name == "research"
 
 
-def test_llm_hands_the_pipeline_a_summarizer(monkeypatch: t.Any) -> None:
-    """SPEC section 2's `--llm`: the pipeline gets something to summarise with."""
-    _configure(_report(), monkeypatch)
-    monkeypatch.setattr(cli_module, "_SUMMARIZER", FakeSummarizer)
-    runner.invoke(app, ["research", "bank rate", "--llm"])
-    assert isinstance(FakePipeline.built["summarizer"], FakeSummarizer)
+def test_ask_runs_the_engine_with_the_ask_profile(monkeypatch: t.Any) -> None:
+    _configure(_answer(profile="ask"), monkeypatch)
+    result = runner.invoke(app, ["ask", "bank rate"])
+    assert result.exit_code == 0, result.stdout
+    assert FakeInquiry.calls[0]["profile"].name == "ask"
 
 
-def test_without_llm_the_summarizer_is_never_built(monkeypatch: t.Any) -> None:
-    """The extractive default must not construct a Gemini client it will not use."""
-    _configure(_report(), monkeypatch)
-    builds: list[int] = []
-    monkeypatch.setattr(cli_module, "_SUMMARIZER", lambda _loaded: builds.append(1))
-    runner.invoke(app, ["research", "bank rate"])
-    assert builds == []
-    assert FakePipeline.built["summarizer"] is None
-
-
-def test_synth_prints_the_answer_after_the_cards(monkeypatch: t.Any) -> None:
-    """SPEC section 2's `--synth`: one answer, over the numbered results."""
-    _configure(_report(), monkeypatch)
-    monkeypatch.setattr(cli_module, "_SUMMARIZER", FakeSummarizer)
-    FakeSummarizer.text = ANSWER
-    result = runner.invoke(app, ["research", "bank rate", "--synth"])
+def test_a_model_answer_is_printed_after_the_cards(monkeypatch: t.Any) -> None:
+    """One answer, over the numbered source cards."""
+    _configure(_answer(text=ANSWER), monkeypatch)
+    result = runner.invoke(app, ["research", "bank rate"])
     assert ANSWER in result.stdout
 
 
-def test_synth_asks_about_the_query_with_a_source_per_result(monkeypatch: t.Any) -> None:
-    """The answer cites sources, so the prompt is numbered per fetched page."""
-    _configure(_report(), monkeypatch)
-    monkeypatch.setattr(cli_module, "_SUMMARIZER", FakeSummarizer)
-    runner.invoke(app, ["research", "bank rate", "--synth"])
-    assert FakeSummarizer.built["answer_query"] == "bank rate"
-    assert FakeSummarizer.built["answer_sources"] == [
-        ("Bank raises rate", "A two sentence summary.")
-    ]
-
-
-def test_synth_prints_no_answer_block_when_the_model_has_none(monkeypatch: t.Any) -> None:
+def test_a_model_with_no_answer_leaves_the_cards_as_the_answer(
+    monkeypatch: t.Any,
+) -> None:
     """A model that cannot answer leaves the cards as the answer, unadorned."""
-    FakeSummarizer.text = None
-    _configure(_report(), monkeypatch)
-    monkeypatch.setattr(cli_module, "_SUMMARIZER", FakeSummarizer)
-    result = runner.invoke(app, ["research", "bank rate", "--synth"])
-    assert "Answer" not in result.stdout
+    _configure(_answer(text="", used_llm=False), monkeypatch)
+    result = runner.invoke(app, ["research", "bank rate"])
     assert "A two sentence summary." in result.stdout
 
 
-def test_json_carries_the_synth_answer(monkeypatch: t.Any) -> None:
+def test_json_carries_the_answer(monkeypatch: t.Any) -> None:
     """A `--json` consumer gets the answer as a field, not as text to scrape."""
-    _configure(_report(), monkeypatch)
-    monkeypatch.setattr(cli_module, "_SUMMARIZER", FakeSummarizer)
-    FakeSummarizer.text = ANSWER
-    result = runner.invoke(app, ["research", "bank rate", "--synth", "--json"])
+    _configure(_answer(text=ANSWER), monkeypatch)
+    result = runner.invoke(app, ["research", "bank rate", "--json"])
     assert json.loads(result.stdout)["answer"] == ANSWER
 
 
-def test_json_has_no_answer_field_without_synth(monkeypatch: t.Any) -> None:
-    """`--synth` is opt-in, so its field is absent unless it was asked for."""
-    _configure(_report(), monkeypatch)
+def test_json_carries_the_answer_even_without_a_model(monkeypatch: t.Any) -> None:
+    """The answer field is always present now: the engine's output, not a flag's."""
+    _configure(_answer(text="", used_llm=False), monkeypatch)
     result = runner.invoke(app, ["research", "bank rate", "--json"])
-    assert "answer" not in json.loads(result.stdout)
+    assert json.loads(result.stdout)["answer"] == ""
 
 
-def test_llm_warns_when_no_llm_key_missing(monkeypatch: t.Any) -> None:
-    """T9.4: missing LLM key produces a warning, not a crash."""
-    _configure(_report(), monkeypatch)
+def test_llm_flags_still_warn_when_no_key_is_missing(monkeypatch: t.Any) -> None:
+    """T9.4: a missing key is a warning, not a crash — and the flags still work.
+
+    `--llm` and `--synth` are deprecated no-ops now (the engine answers whenever
+    a key exists), but a run that asks for LLM output and has no key must say so
+    rather than silently degrading.
+    """
+    _configure(_answer(), monkeypatch)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     result = runner.invoke(app, ["research", "bank rate", "--llm"])
     assert result.exit_code == 0, result.stderr
     assert "No LLM API key found" in result.stderr
     assert "OPENAI_API_KEY or GEMINI_API_KEY" in result.stderr
-    assert (
-        "using extractive summary" in result.stderr.lower() or "fallback" in result.stderr.lower()
-    )
-    # Still produces output (extractive summary)
+    # Still produces output (the cards answer, as they do without a model)
     assert "1 found" in result.stdout
 
 
-def test_synth_warns_when_no_llm_key_missing(monkeypatch: t.Any) -> None:
-    """T9.4: missing LLM key produces a warning, not a crash."""
-    _configure(_report(), monkeypatch)
+def test_synth_still_warns_when_no_key_is_missing(monkeypatch: t.Any) -> None:
+    _configure(_answer(), monkeypatch)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     result = runner.invoke(app, ["research", "bank rate", "--synth"])
     assert result.exit_code == 0, result.stderr
     assert "No LLM API key found" in result.stderr
     assert "OPENAI_API_KEY or GEMINI_API_KEY" in result.stderr
-    # Still produces output (cards without synthesized answer)
     assert "1 found" in result.stdout
 
 
@@ -362,14 +349,14 @@ def test_selected_llm_returns_none_when_no_keys_available(
 
 def test_a_bare_query_runs_the_research_command(monkeypatch: t.Any) -> None:
     """SPEC section 3: `briefing -r "<query>"` is shorthand for `research`."""
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     result = runner.invoke(app, ["-r", "latest news in kenya"])
     assert result.exit_code == 0, result.stdout
-    assert FakePipeline.built["query"] == "latest news in kenya"
+    assert cli_module._LAST_BUILT["query"] == "latest news in kenya"
 
 
 def test_the_shorthand_renders_the_result_cards(monkeypatch: t.Any) -> None:
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     result = runner.invoke(app, ["-r", "latest news in kenya"])
     # A Rich console in a captured stream is not a terminal, so UI auto-plains
     # (SPEC section 3, "auto --plain when piped"); the badge text survives.
@@ -383,7 +370,7 @@ def test_a_colored_run_keeps_the_emoji_badge(monkeypatch: t.Any) -> None:
     Asserted on the emoji alone: Rich writes the styled badge as separate spans,
     so an ANSI code sits between the emoji and its label in a colored render.
     """
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     monkeypatch.setenv("FORCE_COLOR", "1")
     result = runner.invoke(app, ["-r", "latest news in kenya"])
     assert "🟢" in result.stdout
@@ -394,20 +381,20 @@ def test_a_colored_run_keeps_the_emoji_badge(monkeypatch: t.Any) -> None:
 
 
 def test_the_results_flag_sets_the_search_width(monkeypatch: t.Any) -> None:
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     result = runner.invoke(app, ["research", "kenya news", "--results", "25"])
     assert result.exit_code == 0, result.stdout
-    searcher = FakePipeline.built["searcher"]
+    searcher = cli_module._LAST_BUILT["searcher"]
     assert searcher.max_results == 25
 
 
 def test_a_news_query_uses_the_news_searcher(monkeypatch: t.Any) -> None:
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     runner.invoke(app, ["research", "latest kenya news", "--news"])
-    assert FakePipeline.built["searcher"].region
+    assert cli_module._LAST_BUILT["searcher"].region
     # The query's own news words are not what makes this a news run — the flag is,
     # so the searcher's mode must say so rather than being re-derived per query.
-    assert FakePipeline.built["searcher"].mode == "news"
+    assert cli_module._LAST_BUILT["searcher"].mode == "news"
 
 
 def test_news_flag_forces_news_on_a_plain_query(monkeypatch: t.Any) -> None:
@@ -417,44 +404,44 @@ def test_news_flag_forces_news_on_a_plain_query(monkeypatch: t.Any) -> None:
     changed the header word would leave `ddgs.text` running. Asserting on the
     searcher's own mode is what makes that impossible.
     """
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     result = runner.invoke(app, ["research", "kenya economy", "--news"])
     assert result.exit_code == 0, result.stderr
-    assert FakePipeline.built["searcher"].mode == "news"
+    assert cli_module._LAST_BUILT["searcher"].mode == "news"
 
 
 def test_web_flag_forces_web_on_a_news_query(monkeypatch: t.Any) -> None:
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     result = runner.invoke(app, ["research", "latest breaking news", "--web"])
     assert result.exit_code == 0, result.stderr
-    assert FakePipeline.built["searcher"].mode == "text"
+    assert cli_module._LAST_BUILT["searcher"].mode == "text"
 
 
 def test_no_flag_leaves_the_searcher_to_auto_detect(monkeypatch: t.Any) -> None:
     """The default is SPEC section 2's auto-detect, which is `mode=None`."""
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     result = runner.invoke(app, ["research", "latest breaking news"])
     assert result.exit_code == 0, result.stderr
-    assert FakePipeline.built["searcher"].mode is None
+    assert cli_module._LAST_BUILT["searcher"].mode is None
 
 
 def test_no_api_disables_the_api_for_the_run(monkeypatch: t.Any) -> None:
     """SPEC section 4's `--no-api`: no API calls, and nothing whitelisted."""
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     result = runner.invoke(app, ["research", "kenya news", "--no-api"])
     assert result.exit_code == 0, result.stdout
-    assert FakePipeline.built["router"].no_api is True
+    assert cli_module._LAST_BUILT["router"].no_api is True
 
 
 def test_the_time_flag_is_accepted(monkeypatch: t.Any) -> None:
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     for value in ("day", "week", "month", "any"):
         result = runner.invoke(app, ["research", "kenya news", "--time", value])
         assert result.exit_code == 0, (value, result.stdout)
 
 
 def test_news_and_web_are_mutually_exclusive(monkeypatch: t.Any) -> None:
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     result = runner.invoke(app, ["research", "kenya news", "--news", "--web"])
     assert result.exit_code != 0
     assert "web" in result.stderr or "news" in result.stderr
@@ -465,7 +452,7 @@ def test_news_and_web_are_mutually_exclusive(monkeypatch: t.Any) -> None:
 
 
 def test_json_output_is_valid_json(monkeypatch: t.Any) -> None:
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     result = runner.invoke(app, ["research", "kenya news", "--json"])
     assert result.exit_code == 0, result.stdout
     payload = json.loads(result.stdout)
@@ -486,12 +473,12 @@ def _timing_config(tmp_path: t.Any, text: str) -> Path:
 
 def test_the_pipeline_gets_its_configured_timeout(monkeypatch: t.Any, tmp_path: t.Any) -> None:
     """SPEC section 4's per-URL timeout must be tunable without editing source."""
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
     config = _timing_config(tmp_path, "timeouts: {per_url_s: 7}")
     result = runner.invoke(app, ["research", "kenya news", "--config", str(config)])
     assert result.exit_code == 0, result.stdout
-    assert FakePipeline.built["timeout_s"] == 7
+    assert cli_module._LAST_BUILT["per_url_s"] == 7
 
 
 def test_the_router_gets_its_configured_backoff(tmp_path: t.Any) -> None:
@@ -522,16 +509,16 @@ def test_the_pipeline_gets_its_configured_concurrency(monkeypatch: t.Any, tmp_pa
     The key was displayed by `briefing config` but never reached the pipeline,
     so setting it changed nothing — a worse outcome than not offering it.
     """
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
     config = _timing_config(tmp_path, "firecrawl:\n  local:\n    concurrency: 2")
     result = runner.invoke(app, ["research", "kenya news", "--config", str(config)])
     assert result.exit_code == 0, result.stdout
-    assert FakePipeline.built["concurrency"] == 2
+    assert cli_module._LAST_BUILT["concurrency"] == 2
 
 
 def test_json_output_carries_no_rich_decorations(monkeypatch: t.Any) -> None:
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     result = runner.invoke(app, ["research", "kenya news", "--json"])
     assert "╭" not in result.stdout
     assert "Query:" not in result.stdout
@@ -540,29 +527,23 @@ def test_json_output_carries_no_rich_decorations(monkeypatch: t.Any) -> None:
 
 def test_json_output_says_how_each_page_was_fetched(monkeypatch: t.Any) -> None:
     """SPEC section 3: a JSON consumer needs the method badge too."""
-    report = _report()
-    report.results.append(
-        dataclasses.replace(_result(), rank=2, domain="example.co.ke", method=Method.API, ok=True)
-    )
-    _configure(report, monkeypatch)
+    second = dataclasses.replace(_source(), number=2, domain="example.co.ke", method=Method.API)
+    _configure(_answer(sources=[_source(), second]), monkeypatch)
     payload = json.loads(runner.invoke(app, ["research", "kenya news", "--json"]).stdout)
     assert [r["method"] for r in payload["results"]] == ["local", "api"]
 
 
 def test_json_output_carries_the_reason_a_page_degraded(monkeypatch: t.Any) -> None:
     """SPEC section 4: an Aether consumer needs the same reason the terminal gets."""
-    report = _report()
-    report.results.append(
-        dataclasses.replace(
-            _result(),
-            rank=2,
-            domain="example.co.ke",
-            method=Method.SNIPPET,
-            ok=False,
-            warning="page not found (HTTP 404)",
-        )
+    second = dataclasses.replace(
+        _source(),
+        number=2,
+        domain="example.co.ke",
+        method=Method.SNIPPET,
+        ok=False,
+        warning="page not found (HTTP 404)",
     )
-    _configure(report, monkeypatch)
+    _configure(_answer(sources=[_source(), second]), monkeypatch)
     payload = json.loads(runner.invoke(app, ["research", "kenya news", "--json"]).stdout)
     assert payload["results"][1]["warning"] == "page not found (HTTP 404)"
 
@@ -571,7 +552,7 @@ def test_json_output_carries_the_reason_a_page_degraded(monkeypatch: t.Any) -> N
 
 
 def test_plain_output_has_no_emoji_and_no_ansi(monkeypatch: t.Any) -> None:
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     result = runner.invoke(app, ["research", "kenya news", "--plain"])
     assert result.exit_code == 0, result.stdout
     assert "LOCAL" in result.stdout
@@ -582,7 +563,7 @@ def test_plain_output_has_no_emoji_and_no_ansi(monkeypatch: t.Any) -> None:
 
 
 def test_an_unknown_flag_is_a_clean_error(monkeypatch: t.Any) -> None:
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     result = runner.invoke(app, ["research", "kenya news", "--nonsuch"])
     assert result.exit_code != 0
     # Click reports usage errors on stderr; nothing may reach the result stream.
@@ -612,7 +593,7 @@ def test_the_config_error_is_shown_with_a_fix_hint(monkeypatch: t.Any, tmp_path:
 
 
 def test_an_unknown_time_value_is_a_clean_error(monkeypatch: t.Any) -> None:
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     result = runner.invoke(app, ["research", "kenya news", "--time", "fortnight"])
     assert result.exit_code != 0
     assert "fortnight" in result.stderr
@@ -621,7 +602,7 @@ def test_an_unknown_time_value_is_a_clean_error(monkeypatch: t.Any) -> None:
 
 def test_a_results_value_below_one_is_a_clean_error(monkeypatch: t.Any) -> None:
     """SPEC section 3's "plain English plus a fix hint" covers bad values too."""
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     result = runner.invoke(app, ["research", "kenya news", "--results", "0"])
     assert result.exit_code != 0
     assert "0" in result.stderr
@@ -635,7 +616,7 @@ def test_a_named_config_file_that_is_absent_fails(monkeypatch: t.Any, tmp_path: 
     explicitly named file that does not exist is a `ConfigError`, so a typo
     cannot quietly change which config the owner is running under.
     """
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     missing = tmp_path / "no-such.yaml"
     result = runner.invoke(app, ["research", "--config", str(missing), "kenya news"])
     assert result.exit_code != 0
@@ -907,7 +888,7 @@ def test_the_key_never_reaches_the_log_file_or_the_json(
     than the key happening to be absent: an assertion of absence alone would
     also pass against a logger that redacts nothing.
     """
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-secret-key-123")
     result = runner.invoke(app, ["research", "kenya news", "--verbose", "--json"])
@@ -927,7 +908,7 @@ def test_the_gemini_key_never_reaches_the_log_file_or_the_json(
     monkeypatch: t.Any, tmp_path: t.Any
 ) -> None:
     """T9.4: the Gemini key must be masked just like the Firecrawl key."""
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret-key-456")
     result = runner.invoke(app, ["research", "kenya news", "--llm", "--verbose", "--json"])
@@ -949,7 +930,7 @@ def test_a_verbose_run_logs_its_decisions(tmp_path: Path, monkeypatch: t.Any) ->
     Asserted on the query because that is the one thing a debug log exists to
     record: what was asked, and of which searcher.
     """
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
     runner.invoke(app, ["research", "kenya economy news", "--verbose"])
     text = (tmp_path / "briefing.log").read_text(encoding="utf-8")
@@ -962,7 +943,7 @@ def test_the_r_shorthand_also_writes_the_log_file(tmp_path: Path, monkeypatch: t
     The shorthand passes no flags, so this is what proves the install of the
     log handlers does not depend on `--verbose` being given.
     """
-    _configure(_report(), monkeypatch)
+    _configure(_answer(), monkeypatch)
     monkeypatch.setattr(cli_module, "_STATE_DIR", lambda: tmp_path)
     result = runner.invoke(app, ["-r", "kenya economy news"])
     assert result.exit_code == 0, result.stderr
@@ -1146,3 +1127,76 @@ def test_a_timed_out_ddgs_really_reaches_the_backup(monkeypatch: t.Any, tmp_path
     assert result.exit_code == 0, result.stderr
     assert backup_route.called, "the backup was never reached — the wiring is broken"
     assert "Bank raises rate" in result.stdout
+
+
+# --- ported from tests/test_pipeline.py (Stream C) -------------------------
+# The pipeline is gone, but three of its behaviours had no equivalent in the
+# engine's suite, so they are re-pinned here against the engine: the whitelist
+# is read before the fetches start, progress stages arrive in order, and a
+# display that throws costs only the display.
+
+
+_ASK_HITS = [SearchResult("T", "https://old.example/a", "s", "old.example")]
+
+
+def _engine_answer(**engine_overrides: t.Any) -> Answer:
+    """One ask-profile run of the real engine against fakes, no network."""
+
+    async def fetch(_hit: t.Any) -> tuple[str, str, str]:
+        return "T", "sum", "# T\n\nbody"
+
+    async def search(_q: str) -> list[SearchResult]:
+        return list(_ASK_HITS)
+
+    def extract(md: str, title: str, _url: str, _st: str, **_kw: t.Any) -> tuple[str, str]:
+        return title, "sum"
+
+    kwargs: dict[str, t.Any] = {
+        "query": "q",
+        "search": search,
+        "fetch": fetch,
+        "extract": extract,
+        "model": None,
+        "pages": 1,
+        "per_url_s": 2.0,
+        "deadline_s": 0.0,
+    }
+    kwargs.update(engine_overrides)
+    return asyncio.run(inquire(profile=ASK, **kwargs))
+
+
+def test_the_whitelist_is_read_before_the_fetches_start() -> None:
+    """A domain whitelisted by an earlier run must not be reported as new.
+
+    The snapshot is taken before any fetch, so a barrier page the router adds
+    mid-run still counts as an addition, while one already there does not.
+    """
+    store = Whitelist(Path("/tmp") / "never-whitelist.yaml")
+
+    async def _no_add(*_a: t.Any, **_k: t.Any) -> None:
+        """The store records nothing: this run adds no domain."""
+
+    store.add_async = _no_add  # type: ignore[method-assign]
+    store.list = lambda: [WhitelistEntry("old.example", "captcha", "auto")]  # type: ignore[method-assign]
+    answer = _engine_answer(whitelist=store)
+    assert answer.whitelisted == []
+
+
+def test_progress_stages_arrive_in_order() -> None:
+    """A live display depends on the order, not just the presence, of stages."""
+    seen: list[str] = []
+    answer = _engine_answer(on_progress=lambda v: seen.append(v[0]))
+    assert seen[0] == "search"
+    assert "searched" in seen
+    assert seen.index("fetch") < seen.index("fetched")
+    assert answer.sources
+
+
+def test_a_raising_display_callback_does_not_stop_the_run() -> None:
+    """A display that throws must cost the display, not the answer."""
+
+    def _boom(*_a: t.Any, **_k: t.Any) -> None:
+        raise RuntimeError("display exploded")
+
+    answer = _engine_answer(on_progress=_boom, on_source=_boom)
+    assert answer.sources

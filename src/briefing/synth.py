@@ -1,4 +1,4 @@
-"""Gemini synthesis: briefing mode (T5.3) and research mode (T4.1).
+"""Model access: one outcome type, two providers, and the briefing's `Speaker`.
 
 The prompt lives in `prompts/briefing.txt` rather than in this file, so the
 owner can reword the briefing without a code change. It is read per call, not at
@@ -11,20 +11,29 @@ is *to* — the greeting and the prompt's "address them" instruction. They were
 one field, whose default named the assistant as both, so a briefing that could
 not be synthesised greeted itself (T5.4); that is T8.5's fix.
 
-`google-genai` is imported lazily and only by the real client, so a `briefing
-run` with the extra uninstalled still produces its plain greeting instead of
-failing at import (SPEC section 6's failure fallback).
+`google-genai` and `openai` are imported lazily and only by the real clients, so
+a `briefing run` with the extras uninstalled still produces its plain greeting
+instead of failing at import (SPEC section 6's failure fallback).
 
-Every model failure degrades the same way, to one greeting. Nothing here raises
-for a model reason: an unspeakable briefing is a broken briefing, and the
-fallback is the spec'd behaviour rather than an error.
+Every model call, from every mode, goes through `call_model`, which never raises
+for a model reason and always says what happened: a `ModelResult` either carries
+usable text or carries *why not* (`problem()`), in plain English with secrets
+already removed. Callers decide what to degrade to; this module never decides
+that a failure is silent.
 """
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
+import logging
+import os
+import re
+import time
 import typing as t
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "prompts" / "briefing.txt"
 
@@ -39,11 +48,147 @@ PLAIN_GREETING = "Good morning, {name}."
 
 @dataclasses.dataclass(frozen=True)
 class ModelResult:
-    """Result from a model generation call (T12.2 D11 fix)."""
+    """What one model call produced, or why it produced nothing usable.
+
+    Every field after `usage` has a default, so a provider (or a test double)
+    that only knows text and a finish reason still builds one.
+    """
 
     text: str | None
     finish_reason: str | None = None
     usage: dict[str, int | None] | None = None
+    #: One line saying the call itself failed (network, auth, quota, bad request),
+    #: with secrets removed. None when the call completed.
+    error: str | None = None
+    #: Why the provider declined to answer (safety block, content filter, refusal).
+    block_reason: str | None = None
+    #: Who answered, or failed to: "gemini/gemini-2.5-flash", "openai/gpt-4o-mini".
+    label: str = ""
+    elapsed_s: float = 0.0
+
+    @property
+    def truncated(self) -> bool:
+        """True when the provider stopped at its output limit, not at the end.
+
+        Gemini spells it `MAX_TOKENS` (sometimes `FinishReason.MAX_TOKENS`); the
+        OpenAI-compatible endpoints spell it `length`. Checking only one is how a
+        cut-off answer from the other went out looking complete.
+        """
+        reason = str(self.finish_reason or "").upper()
+        return "MAX_TOKENS" in reason or reason == "LENGTH"
+
+    @property
+    def stage(self) -> str | None:
+        """Where it went wrong: request, blocked, truncated or empty; None when fine."""
+        if self.error:
+            return "request"
+        if self.block_reason:
+            return "blocked"
+        if self.truncated:
+            return "truncated"
+        if not (self.text and self.text.strip()):
+            return "empty"
+        return None
+
+    @property
+    def usable(self) -> bool:
+        return self.stage is None
+
+    def problem(self) -> str | None:
+        """Plain English for why there is no usable answer, or None when there is one."""
+        who = self.label or "the model"
+        stage = self.stage
+        if stage == "request":
+            return f"{who} failed: {self.error}"
+        if stage == "blocked":
+            return f"{who} declined to answer ({self.block_reason})"
+        if stage == "truncated":
+            return f"{who} was cut off at its output limit (finish reason: {self.finish_reason})"
+        if stage == "empty":
+            return f"{who} returned no text (finish reason: {self.finish_reason or 'none'})"
+        return None
+
+    def as_dict(self) -> dict[str, t.Any]:
+        """The diagnostics a `--json` consumer or a bug report wants."""
+        return {
+            "model": self.label,
+            "ok": self.usable,
+            "stage": self.stage,
+            "problem": self.problem(),
+            "finish_reason": self.finish_reason,
+            "usage": self.usage,
+            "elapsed_s": round(self.elapsed_s, 2),
+        }
+
+
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_BEARER = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}")
+_ERROR_CAP = 300
+
+
+def redact(text: str, secrets: t.Iterable[str] = ()) -> str:
+    """`text` as one short line with every known secret and bearer token masked.
+
+    An SDK's exception can quote the request it made, so anything that reaches
+    the screen, the JSON or a bug report goes through here first.
+    """
+    for secret in secrets:
+        if secret and len(secret) >= 6:
+            text = text.replace(secret, "***")
+    text = _BEARER.sub("Bearer ***", text)
+    text = " ".join(text.split())
+    return text if len(text) <= _ERROR_CAP else text[: _ERROR_CAP - 1].rstrip() + "…"
+
+
+def clean_model_text(text: str) -> str:
+    """Drop a reasoning model's `<think>` block, which is not part of the answer."""
+    return _THINK_BLOCK.sub("", text).strip()
+
+
+async def call_model(
+    llm: t.Any,
+    prompt: str,
+    *,
+    max_output_tokens: int | None = None,
+) -> ModelResult:
+    """Run `llm.generate(prompt)` and return what happened. Never raises.
+
+    The one seam every mode's model call goes through, so a failure is always a
+    value that says where it failed instead of an exception swallowed three
+    frames up. `llm` is anything with `async generate(prompt)` returning a
+    `ModelResult`, a plain string or None (the older contract test doubles still
+    use). `max_output_tokens` is passed only when given, so a double that takes
+    just a prompt keeps working.
+    """
+    label = str(getattr(llm, "label", "") or "")
+    secrets = [os.environ.get(str(getattr(llm, "api_key_env", "")), "")]
+    started = time.monotonic()
+    try:
+        if max_output_tokens is None:
+            raw = await llm.generate(prompt)
+        else:
+            raw = await llm.generate(prompt, max_output_tokens=max_output_tokens)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        reason = redact(f"{type(exc).__name__}: {exc}", secrets)
+        logger.debug("model call failed", exc_info=True)
+        return ModelResult(
+            text=None, error=reason, label=label, elapsed_s=time.monotonic() - started
+        )
+
+    elapsed = time.monotonic() - started
+    if isinstance(raw, ModelResult):
+        result = raw
+    else:  # the older contract: a bare string, or None for "nothing"
+        result = ModelResult(text=raw if isinstance(raw, str) else None)
+    text = clean_model_text(result.text) if result.text else result.text
+    return dataclasses.replace(
+        result,
+        text=text,
+        label=result.label or label,
+        elapsed_s=result.elapsed_s or elapsed,
+    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -91,19 +236,21 @@ def load_prompt() -> str:
 
 
 class Gemini:
-    """The real Gemini client, behind the one method `Speaker` asks for.
+    """The real Gemini client, behind the one method everything asks for.
 
-    `Speaker` depends on the method, not on this class, so a test hands it any
+    Callers depend on `generate`, not on this class, so a test hands them any
     object with an `async generate(prompt)` and never constructs one of these.
-    `model` and the token cap describe the model call rather than the briefing,
-    so they live here.
+    `model`, the token cap and the key's variable name come from
+    `briefing.gemini` in the config (the CLI used to build this with defaults, so
+    a configured model was never used).
 
     The SDK is imported inside `generate`: the extra is optional, and a briefing
     that cannot reach a model must still fall back rather than die at import.
 
-    The key is read from the environment variable specified by `api_key_env`
-    (default `GEMINI_API_KEY`), not from `GOOGLE_API_KEY` which the SDK would
-    otherwise use. This prevents the SDK's precedence rules from surprising users.
+    The key is read from the variable named by `api_key_env` and passed to the SDK
+    explicitly. A missing key is an error here rather than `None`, because `None`
+    would let the SDK fall back to `GOOGLE_API_KEY` and quietly use a key the
+    config never named.
     """
 
     def __init__(
@@ -118,65 +265,73 @@ class Gemini:
         self.api_key_env = api_key_env
         self._client: t.Any = None
 
-    async def generate(self, prompt: str) -> ModelResult:
-        """Generate a response from Gemini, returning text and metadata (T12.2 D11 fix).
+    @property
+    def label(self) -> str:
+        return f"gemini/{self.model}"
 
-        The key comes from the configured environment variable via the SDK's
-        explicit `api_key` parameter, so `GOOGLE_API_KEY` precedence cannot
-        surprise anyone.
-
-        Logs finish_reason and usage at DEBUG (visible with --verbose).
-        """
-        import logging
-
-        logger = logging.getLogger(__name__)
-        import os
-
+    async def generate(self, prompt: str, *, max_output_tokens: int | None = None) -> ModelResult:
+        """One generation. Raises on a failed call; `call_model` turns that into a value."""
         from google import genai  # lazy: the extra is optional (pyproject)
         from google.genai import types
 
-        api_key = os.environ.get(self.api_key_env, "")
         if self._client is None:
-            self._client = genai.Client(api_key=api_key if api_key else None)
+            api_key = os.environ.get(self.api_key_env, "")
+            if not api_key:
+                raise RuntimeError(f"{self.api_key_env} is not set")
+            self._client = genai.Client(api_key=api_key)
         response = await self._client.aio.models.generate_content(
             model=self.model,
             contents=prompt,
-            config=genai.types.GenerateContentConfig(
-                max_output_tokens=self.max_output_tokens,
+            config=types.GenerateContentConfig(
+                max_output_tokens=max_output_tokens or self.max_output_tokens,
                 thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
 
-        # T12.2: Log finish_reason and usage at DEBUG (visible with --verbose)
-        finish_reason = None
-        usage_info = None
+        finish_reason: str | None = None
+        usage_info: dict[str, int | None] | None = None
+        block_reason: str | None = None
         if response.candidates:
-            finish_reason = str(response.candidates[0].finish_reason)
+            reason = response.candidates[0].finish_reason
+            finish_reason = getattr(reason, "name", None) or str(reason)
             usage = response.usage_metadata
             usage_info = {
                 "visible_tokens": getattr(usage, "candidates_token_count", None),
                 "thinking_tokens": getattr(usage, "thoughts_token_count", None),
                 "total_tokens": getattr(usage, "total_token_count", None),
             }
-            logger.debug(
-                "Gemini response: finish_reason=%s visible_tokens=%s thinking_tokens=%s",
-                finish_reason,
-                usage_info.get("visible_tokens"),
-                usage_info.get("thinking_tokens"),
-            )
-
-        return ModelResult(text=response.text, finish_reason=finish_reason, usage=usage_info)
+        else:
+            # No candidate at all means the *prompt* was refused, not that the
+            # model had nothing to say; the feedback names why.
+            feedback = getattr(response, "prompt_feedback", None)
+            blocked = getattr(feedback, "block_reason", None)
+            block_reason = getattr(blocked, "name", None) or (str(blocked) if blocked else None)
+            block_reason = block_reason or "no candidates returned"
+        logger.debug(
+            "Gemini response: finish_reason=%s usage=%s block=%s",
+            finish_reason,
+            usage_info,
+            block_reason,
+        )
+        return ModelResult(
+            text=response.text if response.candidates else None,
+            finish_reason=finish_reason,
+            usage=usage_info,
+            block_reason=block_reason,
+            label=self.label,
+        )
 
 
 class OpenAI:
-    """OpenAI-compatible LLM client for generation.
+    """OpenAI-compatible client: OpenAI itself, NVIDIA NIM, or any `/v1` endpoint.
 
-    Mirrors `Gemini` API: same `generate()` method returning `ModelResult`.
-    Supports OpenAI and NVIDIA API endpoints via configurable `base_url`.
-    Uses the `openai` package (optional dependency) with async support.
+    Mirrors `Gemini`: same `generate()` returning `ModelResult`. `base_url` is
+    always handed to the SDK. (It used to be dropped whenever a key was set, so a
+    key meant for NVIDIA was sent to `api.openai.com` and rejected there.)
 
-    `speaker` and `ResearchSynth` depend on the `generate` method, not on this
-    class, so tests can hand it any object with `async generate(prompt)`.
+    The key comes from the variable named by `api_key_env` only. A missing key is
+    an error rather than `None`: `None` lets the SDK read `OPENAI_API_KEY`, which
+    could send a key for one service to another service's `base_url`.
     """
 
     def __init__(
@@ -193,49 +348,67 @@ class OpenAI:
         self.max_tokens = max_tokens
         self._client: t.Any = None
 
-    async def generate(self, prompt: str) -> ModelResult:
-        """Generate a response from the LLM, returning text and metadata.
+    @property
+    def label(self) -> str:
+        host = self.base_url.split("//")[-1].split("/")[0]
+        return f"openai/{self.model}" if host == "api.openai.com" else f"{self.model} @ {host}"
 
-        The key comes from the configured environment variable via the SDK's
-        explicit `api_key` parameter, so any precedence rules in the OpenAI SDK
-        cannot surprise anyone.
+    async def _create(self, prompt: str, limit: int) -> t.Any:
+        """The chat call, retried once for models that renamed the token limit.
+
+        Newer OpenAI models reject `max_tokens` and want `max_completion_tokens`;
+        older and compatible endpoints only know `max_tokens`. The error names the
+        parameter, so the retry happens only when it should.
         """
-        import logging
+        kwargs: dict[str, t.Any] = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        try:
+            return await self._client.chat.completions.create(max_tokens=limit, **kwargs)
+        except Exception as exc:
+            if "max_completion_tokens" not in str(exc):
+                raise
+            return await self._client.chat.completions.create(max_completion_tokens=limit, **kwargs)
 
-        logger = logging.getLogger(__name__)
-        import os
-
+    async def generate(self, prompt: str, *, max_output_tokens: int | None = None) -> ModelResult:
+        """One generation. Raises on a failed call; `call_model` turns that into a value."""
         from openai import AsyncOpenAI  # lazy: the extra is optional
 
-        api_key = os.environ.get(self.api_key_env, "")
         if self._client is None:
-            client_kwargs: dict[str, t.Any] = {"api_key": api_key if api_key else None}
-            if not api_key and self.base_url:
-                # When using base_url (e.g., NVIDIA), don't pass api_key=None alone
-                client_kwargs["base_url"] = self.base_url
-            self._client = AsyncOpenAI(**client_kwargs)
+            api_key = os.environ.get(self.api_key_env, "")
+            if not api_key:
+                raise RuntimeError(f"{self.api_key_env} is not set")
+            self._client = AsyncOpenAI(api_key=api_key, base_url=self.base_url or None)
 
-        response = await self._client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=self.max_tokens,
-        )
+        response = await self._create(prompt, max_output_tokens or self.max_tokens)
 
-        finish_reason = response.choices[0].finish_reason
-        usage_info = {
-            "visible_tokens": response.usage.completion_tokens if response.usage else None,
-            "total_tokens": response.usage.total_tokens if response.usage else None,
+        choice = response.choices[0]
+        finish_reason = choice.finish_reason
+        usage = response.usage
+        usage_info: dict[str, int | None] = {
+            "visible_tokens": usage.completion_tokens if usage else None,
+            "total_tokens": usage.total_tokens if usage else None,
         }
+        message = choice.message
+        refusal = getattr(message, "refusal", None)
+        block_reason: str | None = None
+        if finish_reason == "content_filter":
+            block_reason = "content_filter"
+        elif isinstance(refusal, str) and refusal:
+            block_reason = f"refusal: {redact(refusal)}"
         logger.debug(
             "OpenAI response: finish_reason=%s total_tokens=%s",
             finish_reason,
             usage_info.get("total_tokens"),
         )
-
+        content = message.content
         return ModelResult(
-            text=response.choices[0].message.content,
+            text=content if isinstance(content, str) else None,
             finish_reason=finish_reason,
             usage=usage_info,
+            block_reason=block_reason,
+            label=self.label,
         )
 
 
@@ -289,94 +462,26 @@ class Speaker:
         return SpokenBriefing(text, fallback=False)
 
 
-async def _generate(gemini: t.Any, prompt: t.Callable[[], str]) -> str | None:
+async def _generate(llm: t.Any, prompt: t.Callable[[], str]) -> str | None:
     """The model's usable text for the prompt `prompt()` builds, or None.
 
-    The one place a model failure becomes a value rather than an exception. Both
-    `Speaker` and `ResearchSynth` go through it, because SPEC section 6's fallback
-    and section 2's `--llm` degrade the same way: a model that raises, returns
-    nothing, or returns only whitespace is a model that said nothing.
-
-    Building the prompt is inside the try for the same reason — a lost
-    `prompts/briefing.txt` is a repo that cannot speak a briefing, which is the
-    greeting, not a crash.
+    The briefing's model call. A model that fails, is blocked, is cut off or says
+    nothing degrades to the greeting (SPEC section 6), but it no longer does so
+    silently: the reason is logged at WARNING, which `--verbose` and the log file
+    both show. Building the prompt is inside the guard for the same reason — a
+    lost `prompts/briefing.txt` is a repo that cannot speak a briefing, which is
+    the greeting, not a crash.
     """
-    import logging
-
-    logger = logging.getLogger(__name__)
     try:
-        result = await gemini.generate(prompt())
-        # Handle both old-style (str | None) and new-style (ModelResult) returns
-        if isinstance(result, ModelResult):
-            text = result.text
-            finish_reason = result.finish_reason
-            # T12.2: Check for truncated responses (MAX_TOKENS, etc.)
-            if finish_reason and "MAX_TOKENS" in str(finish_reason):
-                logger.warning(
-                    "Model answer was cut off (finish_reason=%s); falling back to passages",
-                    finish_reason,
-                )
-                return None
-        else:
-            # Old-style return
-            text = result
-        if text is None or not text.strip():
-            return None
-        return str(text).strip()
-    except Exception:  # noqa: BLE001 - any failure degrades, never raises
-        return None
-
-
-# Research mode's prompts. They are not files like `prompts/briefing.txt` because
-# nothing in SPEC section 2 asks for the owner to reword them; if that changes,
-# move both to `prompts/` and read them per call the way `load_prompt` does.
-_ABSTRACTIVE_PROMPT = (
-    "Summarise the page below in two sentences, using only what it says. If it says\n"
-    "nothing of substance, say so rather than inventing anything.\n\n"
-    "Heading: {heading}\n\n{text}"
-)
-
-_ANSWER_PROMPT = (
-    "Answer the question in three sentences or fewer, using only the sources below.\n"
-    "Cite each claim's source as its number in brackets, e.g. [1]. If the sources do\n"
-    "not answer it, say that instead of guessing.\n\n"
-    "Question: {query}\n\n{sources}"
-)
-
-
-class ResearchSynth:
-    """Research mode's two Gemini features: abstractive summaries, one answer.
-
-    `--llm` rewrites each page's extractive summary; `--synth` builds one answer
-    from all of them, numbered so the answer can cite its sources (SPEC section 2).
-    Both are opt-in, so both must be able to say "nothing": `summary` takes the
-    fallback it degrades to, and `answer` returns None.
-    """
-
-    def __init__(self, gemini: t.Any) -> None:
-        self.gemini = gemini
-
-    async def summary(self, *, heading: str, text: str, fallback: str) -> str:
-        """The model's summary of the page, or `fallback` when there isn't one.
-
-        `fallback` is the extractive summary the page already had, which is the
-        whole of SPEC section 2's graceful degradation: a model that cannot
-        summarise leaves the result as it was, never emptier.
-        """
-        prompt = _ABSTRACTIVE_PROMPT.format(heading=heading, text=text)
-        return await _generate(self.gemini, lambda: prompt) or fallback
-
-    async def answer(self, *, query: str, sources: t.Sequence[tuple[str, str]]) -> str | None:
-        """One answer across every source, or None when there isn't one.
-
-        Empty `sources` never reaches the model: with nothing fetched there is
-        nothing to answer from, and a model given no sources invents news.
-        """
-        if not sources:
-            return None
-        numbered = "\n".join(
-            f"{position}. {heading} — {summary}"
-            for position, (heading, summary) in enumerate(sources, start=1)
+        built = prompt()
+    except Exception as exc:  # noqa: BLE001 - an unbuildable prompt degrades like a failed call
+        logger.warning(
+            "briefing prompt could not be built: %s", redact(f"{type(exc).__name__}: {exc}")
         )
-        prompt = _ANSWER_PROMPT.format(query=query, sources=numbered)
-        return await _generate(self.gemini, lambda: prompt)
+        return None
+    result = await call_model(llm, built)
+    problem = result.problem()
+    if problem is not None:
+        logger.warning("briefing model: %s", problem)
+        return None
+    return str(result.text).strip()

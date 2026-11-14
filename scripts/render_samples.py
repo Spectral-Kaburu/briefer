@@ -12,13 +12,13 @@ network, a search, or a fetch.
 
 from __future__ import annotations
 
+import typing as t
 from pathlib import Path
 
 from rich.console import Console
 
-from briefing.ask import Answer
 from briefing.fetch.router import ErrorClass, Method
-from briefing.pipeline import Event, Report, Result
+from briefing.inquiry import Answer, EvidenceSource, Notice
 from briefing.ui import UI
 
 OUT = Path(__file__).resolve().parent.parent / "docs" / "sample-output.txt"
@@ -28,10 +28,10 @@ HEADER = """\
 ========================
 
 Five runs rendered through the real `briefing.ui` renderers (T3.5), at the two
-widths that matter. No network, no pipeline: each scenario is a `Report` handed
-to the same functions `briefing research` calls, so these are the exact bytes the
-UI writes. Regenerate with `scripts/render_samples.py` rather than editing by
-hand.
+widths that matter. No network, no engine: each scenario is a hand-built `Answer`
+handed to the same functions `briefing research` calls, so these are the exact
+bytes the UI writes. Regenerate with `scripts/render_samples.py` rather than
+editing by hand.
 
 Each scenario shows its live progress block (SPEC section 3's one spinner line
 per URL) and then a representative couple of cards; `found` in the footer counts
@@ -59,33 +59,53 @@ Ask mode scenarios (T9.7, T10.7):
 """
 
 
-def _result(rank, title, url, snippet, summary, method, **kw):
+def _source(number, title, url, snippet, summary, method, **kw):
+    """One numbered source card: the same fields the engine hands the UI."""
     from urllib.parse import urlparse
 
-    return Result(
-        rank=rank,
+    return EvidenceSource(
+        number=number,
+        source=title,
+        domain=urlparse(url).hostname or "",
         title=title,
         heading=kw.pop("heading", title),
         url=url,
-        domain=urlparse(url).hostname or "",
         snippet=snippet,
-        source=kw.pop("source", ""),
-        age=kw.pop("age", ""),
-        summary=summary,
+        text=summary,
         method=method,
         ok=kw.pop("ok", method is not Method.SNIPPET),
         error_class=kw.pop("error_class", ErrorClass.OK),
+        warning=kw.pop("warning", ""),
+        age=kw.pop("age", ""),
+    )
+
+
+def _answer(*, found, elapsed_s, sources, **kw):
+    """A research answer for the given cards, so the footer has its counts."""
+    warnings = [s.warning for s in sources if s.warning]
+    notices = [Notice("fetch", w) for w in warnings]
+    return Answer(
+        question="kenya economy",
+        text=kw.pop("text", ""),
+        used_llm=kw.pop("used_llm", False),
+        sources=list(sources),
+        timings={"search": 0.8, "fetch": elapsed_s},
+        warnings=warnings,
+        notices=notices,
+        found=found,
+        whitelisted=kw.pop("whitelisted", []),
+        profile="research",
         **kw,
     )
 
 
 SCENARIOS = {
-    "1. All local, all good (the happy path)": Report(
+    "1. All local, all good (the happy path)": _answer(
         found=5,
         elapsed_s=6.4,
         whitelisted=[],
-        results=[
-            _result(
+        sources=[
+            _source(
                 1,
                 "Kenya's economy grew 5.2% last quarter",
                 "https://nation.africa/kenya/economy-grew",
@@ -95,7 +115,7 @@ SCENARIOS = {
                 Method.LOCAL,
                 age="2h ago",
             ),
-            _result(
+            _source(
                 2,
                 "What the shilling's stability means for borrowers",
                 "https://businessdaily.africa/shilling-stability",
@@ -107,12 +127,12 @@ SCENARIOS = {
             ),
         ],
     ),
-    "2. A barrier page recovered by the API": Report(
+    "2. A barrier page recovered by the API": _answer(
         found=6,
         elapsed_s=9.1,
         whitelisted=[("paywalled.example", "captcha")],
-        results=[
-            _result(
+        sources=[
+            _source(
                 1,
                 "Paywalled: the full rate decision",
                 "https://paywalled.example/rate-decision",
@@ -122,7 +142,7 @@ SCENARIOS = {
                 Method.API,
                 age="1h ago",
             ),
-            _result(
+            _source(
                 2,
                 "Regional comparison: East African central banks",
                 "https://nation.africa/regional-banks",
@@ -134,12 +154,12 @@ SCENARIOS = {
             ),
         ],
     ),
-    "3. Everything degraded to snippets (local down)": Report(
+    "3. Everything degraded to snippets (local down)": _answer(
         found=4,
         elapsed_s=1.2,
         whitelisted=[],
-        results=[
-            _result(
+        sources=[
+            _source(
                 1,
                 "Inflation eases to 4.1 percent",
                 "https://nation.africa/inflation-eases",
@@ -147,7 +167,7 @@ SCENARIOS = {
                 "",
                 Method.SNIPPET,
             ),
-            _result(
+            _source(
                 2,
                 "Analysts split on the next move",
                 "https://businessdaily.africa/analysts-split",
@@ -157,12 +177,12 @@ SCENARIOS = {
             ),
         ],
     ),
-    "4. A hard failure alongside real results": Report(
+    "4. A hard failure alongside real results": _answer(
         found=5,
         elapsed_s=7.8,
         whitelisted=[],
-        results=[
-            _result(
+        sources=[
+            _source(
                 1,
                 "Central bank statement in full",
                 "https://nation.africa/statement-full",
@@ -171,7 +191,7 @@ SCENARIOS = {
                 Method.LOCAL,
                 age="2h ago",
             ),
-            _result(
+            _source(
                 2,
                 "Dead link: page returns 404",
                 "https://gone.example/old-story",
@@ -186,12 +206,12 @@ SCENARIOS = {
             ),
         ],
     ),
-    "5. Long titles, long summaries, narrow and wide terminals": Report(
+    "5. Long titles, long summaries, narrow and wide terminals": _answer(
         found=3,
         elapsed_s=5.0,
         whitelisted=[("very-long-domain-name-here.example.co.ke", "403 forbidden")],
-        results=[
-            _result(
+        sources=[
+            _source(
                 1,
                 "A long headline that wraps once at eighty columns and shows the continuation line",
                 "https://very-long-domain-name-here.example.co.ke/some/deep/path/story",
@@ -350,178 +370,58 @@ Applications include image recognition, natural language processing, and predict
 }
 
 
-def _finished(result: Result, total: int) -> Event:
-    """The progress line the pipeline emits for one finished URL.
+def _live_lines(answer: Answer) -> t.Iterator[str]:
+    """The (stage, detail) pairs the engine emits, one per page as it lands.
 
-    Derived from the same `Result` the card renders rather than a second fixture,
+    Derived from the same sources the cards render rather than a second fixture,
     so the live block cannot drift out of step with the cards below it.
     """
-    return Event(
-        kind="finished",
-        query="kenya economy",
-        mode="text",
-        url=result.url,
-        method=result.method,
-        error_class=result.error_class,
-        done=result.rank,
-        total=total,
-    )
-
-
-def _render_answer(answer: Answer, *, plain: bool = False) -> str:
-    """Render an Answer to a string (plain text mode, width 100).
-
-    This mirrors `_render_answer` from cli.py but returns a string.
-    Handles both 6-element and 9-element source tuples for compatibility.
-    """
-    from rich import box
-    from rich.console import Console
-    from rich.panel import Panel
-    from rich.text import Text
-
-    console = Console(record=True, width=100)
-    if plain:
-        console.no_color = True
-
-    # 1. Answer panel
-    answer_panel = Panel(
-        Text(answer.text),
-        title="Answer",
-        box=box.SIMPLE if plain else box.ROUNDED,
-        expand=True,
-    )
-    console.print(answer_panel)
-
-    # 2. Numbered source list - handle both 6 and 9 element tuples
-    console.print()
+    yield "search", ""
+    yield "searched", str(answer.found)
+    yield "fetch", str(len(answer.sources))
     for source in answer.sources:
-        if len(source) == 9:
-            num, title, url, domain, method, text, license, author, _snippet = source
-        else:
-            # Backward compatible with 6-element tuples
-            num, title, url, domain, method, text = source[:6]
-            license = source[6] if len(source) > 6 else ""
-            author = source[7] if len(source) > 7 else ""
-            _snippet = source[8] if len(source) > 8 else ""
+        yield "fetched", source.domain
+    if answer.timings.get("model"):
+        yield "model", ""
 
-        badge_text = f"[{method}]"
 
-        line = Text()
-        line.append(f"[{num}] ", "bold")
-        line.append(title or "(no title)")
-        line.append(f"  {badge_text}")
-        console.print(line)
+def _render(answer: Answer, *, width: int, plain: bool) -> str:
+    """Render one answer through the real UI, capturing the bytes it writes.
 
-        # Show domain on its own line
-        domain_line = Text()
-        domain_line.append(domain, "dim")
-        console.print(domain_line)
-
-        # Show text content (summary/passage)
-        if text:
-            console.print(text)
-
-        # Show license and author (like research mode cards)
-        if license:
-            license_line = Text()
-            license_line.append(license, "cyan")
-            if author:
-                license_line.append(f", by {author}", "bright_black")
-            console.print(license_line)
-
-        # Show URL
-        if url:
-            url_line = Text()
-            url_line.append(url, "blue")
-            console.print(url_line)
-
-    # 3. Footer with timings and warnings
-    footer_parts = []
-
-    # Source counts by method (handle both 6 and 9 element tuples)
-    source_methods = [s[4] for s in answer.sources]
-    local_count = sum(1 for m in source_methods if m == "LOCAL")
-    api_count = sum(1 for m in source_methods if m == "API")
-    snippet_count = sum(1 for m in source_methods if m == "SNIPPET")
-    wiki_count = sum(1 for m in source_methods if m == "WIKI")
-    so_count = sum(1 for m in source_methods if m == "SO")
-    ddga_count = sum(1 for m in source_methods if m == "DDGA")
-
-    if local_count or api_count:
-        counts_parts = []
-        if local_count:
-            counts_parts.append(f"{local_count} local")
-        if api_count:
-            counts_parts.append(f"{api_count} API")
-        if snippet_count:
-            counts_parts.append(f"{snippet_count} snippet")
-        if wiki_count:
-            counts_parts.append(f"{wiki_count} wiki")
-        if so_count:
-            counts_parts.append(f"{so_count} so")
-        if ddga_count:
-            counts_parts.append(f"{ddga_count} ddga")
-        footer_parts.append(" · ".join(counts_parts))
-
-    if answer.used_llm:
-        method_desc = "LLM"
-    else:
-        method_desc = "passages"
-    footer_parts.append(f"{len(answer.sources)} sources ({method_desc})")
-
-    if answer.timings:
-        timing_parts = []
-        if "search" in answer.timings:
-            timing_parts.append(f"search: {answer.timings['search']:.2f}s")
-        if "fetch" in answer.timings:
-            timing_parts.append(f"fetch: {answer.timings['fetch']:.2f}s")
-        if "model" in answer.timings:
-            timing_parts.append(f"model: {answer.timings['model']:.2f}s")
-        if timing_parts:
-            footer_parts.append(" · " + " · ".join(timing_parts))
-
-    if answer.warnings:
-        footer_parts.append(" · " + "; ".join(answer.warnings))
-
-    if footer_parts:
-        footer_panel = Panel(
-            Text(" · ".join(footer_parts), "dim"),
-            box=box.SIMPLE,
-            expand=True,
-        )
-        console.print(footer_panel)
-
+    Same objects `briefing research` and `briefing ask` build, same UI call
+    order the CLI uses, so the saved samples are the exact bytes a run writes
+    rather than an approximation of them.
+    """
+    console = Console(record=True, width=width)
+    with UI(console=console, plain=plain) as ui:
+        ui.begin(answer.question, "research")
+        for stage, detail in _live_lines(answer):
+            ui.on_progress(stage, detail)
+        for source in answer.sources:
+            ui.on_source(source)
+        ui.show(answer)
     return console.export_text(clear=False)
 
 
 def main() -> str:
     chunks = [HEADER]
 
-    # Render research scenarios
-    for label, report in SCENARIOS.items():
+    for label, answer in SCENARIOS.items():
         for width in (100, 80):
-            console = Console(record=True, width=width)
-            ui = UI(console=console, plain=True)
-            ui.begin("kenya economy", "text")
-            for result in report.results:
-                ui.on_event(_finished(result, len(report.results)))
-            ui.show(report)
             chunks.append("=" * width)
             chunks.append(f"{label}  [width {width}]")
             chunks.append("=" * width)
-            chunks.append(console.export_text(clear=False))
+            chunks.append(_render(answer, width=width, plain=True))
 
-    # Render ask scenarios
     chunks.append("\n" + "=" * 60)
-    chunks.append("ASK MODE SCENARIOS (T9.7)")
+    chunks.append("ASK MODE SCENARIOS")
     chunks.append("=" * 60 + "\n")
 
     for label, answer in ASK_SCENARIOS.items():
-        output = _render_answer(answer, plain=False)
         chunks.append("=" * 100)
         chunks.append(f"{label}  [width 100]")
         chunks.append("=" * 100)
-        chunks.append(output)
+        chunks.append(_render(answer, width=100, plain=True))
 
     text = "\n".join(chunks)
     OUT.write_text(text, encoding="utf-8")
